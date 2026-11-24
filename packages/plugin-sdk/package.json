@@ -1,0 +1,14 @@
+{
+  "name": "@alfred/plugin-sdk",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@alfred/protocol": "workspace:*"
+  }
+}

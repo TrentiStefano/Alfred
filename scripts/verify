@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Single gatekeeper entrypoint: exits 0 only if every check passes. Same as `pnpm verify`.
+set -e
+cd "$(dirname "$0")/.."
+exec node scripts/verify.ts "$@"
