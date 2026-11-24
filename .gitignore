@@ -1,0 +1,21 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Agent worktrees (subagents, research spikes)
+.claude/worktrees/
+.claude/settings.local.json
+
+# Machine-specific config: NEVER commit. Commit a `*.example.*` placeholder instead.
+.env
+.env.*
+!.env.example
+connectors.yaml
+docker-compose.yml
+docker-compose.override.yml
+compose.yaml
+compose.override.yaml
+*.local.*
+secrets/
+data/

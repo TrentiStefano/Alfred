@@ -1,0 +1,17 @@
+# Placeholder only. Copy to `connectors.yaml` (gitignored) and point it at your own Systems of record.
+# Hosts and tokens below are fake. Secrets are referenced by name and resolved by the SecretStore.
+# The exact schema is decided in the plugin-sdk / daemon-core specs.
+
+connectors:
+  - id: searxng
+    kind: native
+    config:
+      baseUrl: https://searxng.example.invalid
+
+  - id: home-assistant
+    kind: mcp
+    transport: http
+    url: https://home-assistant.example.invalid/api/mcp
+    secret: home-assistant.token
+    readOnlyTools: [GetLiveContext]
+    defaultRisk: write
