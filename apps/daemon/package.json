@@ -11,6 +11,10 @@
   },
   "dependencies": {
     "@alfred/plugin-sdk": "workspace:*",
-    "@alfred/protocol": "workspace:*"
+    "@alfred/protocol": "workspace:*",
+    "ws": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2"
   }
 }

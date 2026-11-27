@@ -1,10 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHealthResponse } from "@alfred/protocol";
+import { createStubAgentRuntime, type AgentRuntime } from "./agent-runtime.ts";
+import { attachWebSocketServer } from "./ws-server.ts";
 
 export interface DaemonServerOptions {
   host?: string;
   port?: number;
+  agentRuntime?: AgentRuntime;
 }
 
 export interface DaemonServer {
@@ -43,11 +46,13 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   sendJson(res, 404, { error: "not_found" });
 }
 
-/** Start the daemon HTTP server (health and version endpoint). */
+/** Start the daemon HTTP and `/ws` WebSocket server. */
 export async function startDaemonServer(options: DaemonServerOptions = {}): Promise<DaemonServer> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 0;
+  const runtime = options.agentRuntime ?? createStubAgentRuntime();
   const server = createServer(handleRequest);
+  const wsServer = attachWebSocketServer(server, runtime);
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -60,12 +65,19 @@ export async function startDaemonServer(options: DaemonServerOptions = {}): Prom
   const address = server.address() as AddressInfo;
   return {
     port: address.port,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
+    close: async () => {
+      await wsServer.close();
+      server.closeIdleConnections();
+      await new Promise<void>((resolve, reject) => {
         server.close((err) => {
-          if (err) reject(err);
-          else resolve();
+          if (err !== undefined) {
+            reject(err);
+          } else {
+            resolve();
+          }
         });
-      }),
+      });
+      await runtime.close?.();
+    },
   };
 }

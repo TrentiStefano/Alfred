@@ -1,0 +1,114 @@
+{
+  "client": {
+    "hello": {
+      "type": "hello",
+      "protocolVersion": 1,
+      "client": {
+        "name": "alfred-client",
+        "version": "1.0.0",
+        "platform": "web"
+      }
+    },
+    "helloMinimal": {
+      "type": "hello",
+      "protocolVersion": 1
+    },
+    "submit": {
+      "type": "submit",
+      "threadId": "main",
+      "requestId": "req-001",
+      "text": "What is on my schedule today?"
+    }
+  },
+  "daemon": {
+    "snapshotEmpty": {
+      "type": "snapshot",
+      "protocolVersion": 1,
+      "seq": 0,
+      "thread": {
+        "id": "main",
+        "agentName": "Alfred",
+        "status": "idle",
+        "messages": []
+      }
+    },
+    "snapshotWithMessages": {
+      "type": "snapshot",
+      "protocolVersion": 1,
+      "seq": 2,
+      "thread": {
+        "id": "main",
+        "agentName": "Alfred",
+        "status": "idle",
+        "messages": [
+          {
+            "id": "msg-1",
+            "role": "owner",
+            "text": "Hello Alfred",
+            "status": "complete",
+            "requestId": "req-001",
+            "createdAt": "2026-11-27T12:00:00.000Z"
+          },
+          {
+            "id": "msg-2",
+            "role": "agent",
+            "text": "Good day. How can I help?",
+            "status": "complete",
+            "createdAt": "2026-11-27T12:00:01.000Z"
+          }
+        ]
+      }
+    },
+    "snapshotStreaming": {
+      "type": "snapshot",
+      "protocolVersion": 1,
+      "seq": 3,
+      "thread": {
+        "id": "main",
+        "agentName": "Alfred",
+        "status": "streaming",
+        "messages": [
+          {
+            "id": "msg-3",
+            "role": "agent",
+            "text": "Working on",
+            "status": "streaming",
+            "createdAt": "2026-11-27T12:00:02.000Z"
+          }
+        ]
+      }
+    },
+    "ack": {
+      "type": "ack",
+      "threadId": "main",
+      "requestId": "req-001",
+      "submissionId": "sub-001"
+    },
+    "ackDeduplicated": {
+      "type": "ack",
+      "threadId": "main",
+      "requestId": "req-001",
+      "submissionId": "sub-001",
+      "deduplicated": true
+    },
+    "errorHandshake": {
+      "type": "error",
+      "code": "handshake_required",
+      "message": "Send hello before any other message."
+    },
+    "errorUnsupportedVersion": {
+      "type": "error",
+      "code": "unsupported_protocol_version",
+      "message": "Unsupported protocol version 99; expected 1.",
+      "protocolVersion": 99,
+      "expectedProtocolVersion": 1
+    },
+    "errorSubmit": {
+      "type": "error",
+      "code": "unknown_thread",
+      "message": "Thread not found.",
+      "threadId": "missing",
+      "requestId": "req-404"
+    }
+  }
+}
