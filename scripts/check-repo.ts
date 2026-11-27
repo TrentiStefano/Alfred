@@ -3,7 +3,7 @@
 //  2. AGENTS.md stays a map, not a manual (<= 80 lines).
 //  3. Claude Code and Antigravity run the same skills and procedure (scripts/agent-skills.ts).
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { skillTreeDrift, workflowDrift } from "./agent-skills.ts";
 
 const AGENTS_MAX_LINES = 80;
@@ -58,6 +58,18 @@ for (const drift of workflowDrift()) {
   problems.push(
     `Antigravity workflow out of sync: ${drift}. Run \`pnpm skills:sync\` (never edit .agents/workflows by hand).`,
   );
+}
+
+const GUARD_FILES = [
+  ".agents/hooks.json",
+  ".agents/hooks/guard-command.mjs",
+  ".claude/settings.json",
+  ".claude/hooks/guard-command.mjs",
+];
+for (const file of GUARD_FILES) {
+  if (!existsSync(file)) {
+    problems.push(`Missing agent command guard file: ${file}.`);
+  }
 }
 
 if (problems.length > 0) {

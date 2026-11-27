@@ -1,0 +1,48 @@
+name: Guardrail approval
+
+# Fails while a PR modifies guarded files (methodology, skills, hooks, verification scripts,
+# linter/compiler/boundary configs, CI workflows, .gitignore, or root manifests) without a current
+# `human-approved` label applied after the latest push.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+concurrency:
+  group: guardrails-approval-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  approval:
+    name: Guardrail approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Check out the base commit so the PR cannot modify the approval logic judging it.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Fetch pull request head (data only)
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/head"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Check guardrail approval
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: node scripts/guardrails-approval.ts

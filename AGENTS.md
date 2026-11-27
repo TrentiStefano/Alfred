@@ -41,6 +41,10 @@ Real config (`.env`, `connectors.yaml`, compose files, Tailscale, provider auth)
 
 Non-trivial features: `/grill-with-docs` → `/to-spec` (into `specs/`) → `/to-tickets` → `/implement` → `/code-review`. After merging, `/retro`, and encode each recurring mistake as a rule in `tools/eslint-plugin-alfred` or `scripts/`.
 
+## Pull requests & merges
+
+Work on branches; never push directly to `main`. Once `verify` and `Guardrail approval` pass, merge ordinary PRs with `gh pr merge --squash --delete-branch`. PRs touching guarded files (`AGENTS.md`, skills, hooks, `scripts/`, lint/boundary/TS/CI config, `.gitignore`, root manifests) require the Owner's `human-approved` label in GitHub UI; agents must never add it.
+
 ## Agent tools
 
 Claude Code and Antigravity follow this same file, skills and procedure. Claude Code reads `.claude/skills` (`/name`). Antigravity reads `.agents/skills`, plus `/name` workflows in `.agents/workflows` that `pnpm skills:sync` generates. Update skills for both tools at once (`npx skills@latest add mattpocock/skills -a claude-code -a antigravity --copy -y -s <skills>`), then run `pnpm skills:sync`. `pnpm check:repo` fails if the two drift.
