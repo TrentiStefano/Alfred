@@ -11,6 +11,14 @@
   },
   "dependencies": {
     "@alfred/plugin-sdk": "workspace:*",
-    "@alfred/protocol": "workspace:*"
+    "@alfred/protocol": "workspace:*",
+    "@earendil-works/chord": "1.6.1",
+    "@earendil-works/pi-ai": "1.6.1",
+    "@earendil-works/pi-coding-agent": "1.6.1",
+    "@earendil-works/pi-durable": "1.6.1",
+    "ws": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2"
   }
 }
