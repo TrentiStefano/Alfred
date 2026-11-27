@@ -226,18 +226,24 @@ class _StatusChip extends StatelessWidget {
       ThreadConnectionStatus.error => colors.onErrorContainer,
     };
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        status.label,
-        style: TextStyle(
-          color: foreground,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      label: 'Connection status: ${status.label}',
+      excludeSemantics: true,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          status.label,
+          style: TextStyle(
+            color: foreground,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ),
     );
@@ -252,11 +258,15 @@ class _ErrorBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme colors = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
-      color: colors.errorContainer,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Text(message, style: TextStyle(color: colors.onErrorContainer)),
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: Container(
+        width: double.infinity,
+        color: colors.errorContainer,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Text(message, style: TextStyle(color: colors.onErrorContainer)),
+      ),
     );
   }
 }
@@ -279,42 +289,48 @@ class _MessageBubble extends StatelessWidget {
         : colors.onSurface;
     final String speaker = isOwner ? 'Owner' : agentName;
 
-    return Align(
-      alignment: isOwner ? Alignment.centerRight : Alignment.centerLeft,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: background,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  speaker,
-                  style: TextStyle(
-                    color: foreground.withValues(alpha: 0.75),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(message.text, style: TextStyle(color: foreground)),
-                if (message.status != ThreadMessageStatus.complete) ...<Widget>[
-                  const SizedBox(height: 4),
+    return Semantics(
+      container: true,
+      label: '$speaker (${message.status.wireValue}): ${message.text}',
+      excludeSemantics: true,
+      child: Align(
+        alignment: isOwner ? Alignment.centerRight : Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
                   Text(
-                    message.status.wireValue,
+                    speaker,
                     style: TextStyle(
-                      color: foreground.withValues(alpha: 0.7),
+                      color: foreground.withValues(alpha: 0.75),
                       fontSize: 11,
-                      fontStyle: FontStyle.italic,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
+                  const SizedBox(height: 4),
+                  Text(message.text, style: TextStyle(color: foreground)),
+                  if (message.status !=
+                      ThreadMessageStatus.complete) ...<Widget>[
+                    const SizedBox(height: 4),
+                    Text(
+                      message.status.wireValue,
+                      style: TextStyle(
+                        color: foreground.withValues(alpha: 0.7),
+                        fontSize: 11,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),

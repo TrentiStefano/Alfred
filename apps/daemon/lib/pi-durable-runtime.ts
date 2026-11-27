@@ -227,7 +227,7 @@ function mapEntriesToMessages(
     const partialText = extractAssistantText(live.generation.message.content);
     if (partialText.length > 0) {
       messages.push({
-        id: `live-gen-${String(live.run.taskId)}`,
+        id: `live-gen-${String(live.run.taskId)}-a${String(live.generation.attempt)}`,
         role: "agent",
         text: partialText,
         status: "streaming",
@@ -327,6 +327,7 @@ function buildHarnessSettings(
 
 interface ActiveGenerationState {
   taskId: string;
+  attempt: number;
   messageId: string;
   emittedText: string;
 }
@@ -449,9 +450,12 @@ export async function createPiDurableAgentRuntime(
   if (cachedLive?.run !== undefined && cachedLive.generation?.message !== undefined) {
     const partialText = extractAssistantText(cachedLive.generation.message.content);
     if (partialText.length > 0) {
+      const taskId = String(cachedLive.run.taskId);
+      const attempt = cachedLive.generation.attempt;
       activeGeneration = {
-        taskId: String(cachedLive.run.taskId),
-        messageId: `live-gen-${String(cachedLive.run.taskId)}`,
+        taskId,
+        attempt,
+        messageId: `live-gen-${taskId}-a${String(attempt)}`,
         emittedText: partialText,
       };
     }
@@ -595,11 +599,25 @@ export async function createPiDurableAgentRuntime(
       const partialText = extractAssistantText(live.generation.message.content);
       if (partialText.length > 0) {
         const runTaskId = String(live.run.taskId);
+        const attempt = live.generation.attempt;
+        if (
+          activeGeneration !== undefined &&
+          (activeGeneration.taskId !== runTaskId || activeGeneration.attempt !== attempt)
+        ) {
+          emitDelta({
+            kind: "turn_error",
+            messageId: activeGeneration.messageId,
+            status: "interrupted",
+            message: "Response interrupted.",
+          });
+          activeGeneration = undefined;
+        }
         if (activeGeneration === undefined) {
-          const messageId = `live-gen-${runTaskId}`;
+          const messageId = `live-gen-${runTaskId}-a${String(attempt)}`;
           const createdAt = new Date(live.generation.message.timestamp).toISOString();
           activeGeneration = {
             taskId: runTaskId,
+            attempt,
             messageId,
             emittedText: partialText,
           };
@@ -615,7 +633,6 @@ export async function createPiDurableAgentRuntime(
             delta: partialText,
           });
         } else if (
-          activeGeneration.taskId === runTaskId &&
           partialText.length > activeGeneration.emittedText.length &&
           partialText.startsWith(activeGeneration.emittedText)
         ) {
