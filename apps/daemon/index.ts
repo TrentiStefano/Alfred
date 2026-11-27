@@ -17,7 +17,11 @@ export {
   type PiDurableAgentRuntimeOptions,
 } from "./lib/pi-durable-runtime.ts";
 export { describeDaemon } from "./lib/describe.ts";
-export { SEARXNG_SEARCH_CONTRACT } from "./lib/searxng.ts";
+export {
+  createSearxngConnector,
+  type SearxngConnector,
+  type SearxngRuntimeConfig,
+} from "./lib/searxng.ts";
 export {
   installSignalShutdown,
   type ShutdownHost,

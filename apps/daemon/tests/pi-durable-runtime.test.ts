@@ -26,9 +26,9 @@ import {
   type DaemonMessage,
   type DeltaMessage,
 } from "@alfred/protocol";
-import { SEARXNG_SEARCH_CONTRACT } from "../index.ts";
 import {
   createPiDurableAgentRuntime,
+  createSearxngConnector,
   startDaemonServer,
   type AgentRuntime,
   type DaemonServer,
@@ -149,8 +149,13 @@ describe("Pi Durable AgentRuntime over WebSocket", () => {
     }
   });
 
-  it("declares SearXNG web search as a read-risk Tool", () => {
-    expect(SEARXNG_SEARCH_CONTRACT).toEqual({ tool: "searxng_web_search", risk: "read" });
+  it("registers SearXNG web search as a read-risk Tool", async () => {
+    const connector = createSearxngConnector({
+      enabled: true,
+      search: () => Promise.resolve("synthetic result"),
+    });
+    expect(connector.searchToolContract).toEqual({ tool: "searxng_web_search", risk: "read" });
+    await connector.close();
   });
 
   it("persists Thread messages in SQLite across daemon restarts", async () => {

@@ -12,6 +12,8 @@ The first command must print `true`. In the Owner’s local configuration, set `
 
 The image runs a synthetic SearXNG endpoint on container loopback. Alfred starts it with the network disabled and invokes the MCP server over private stdio. The synthetic endpoint returns fixed data and has no upstream search engines.
 
+On restart, Alfred checks that an existing labeled container still uses the configured pinned image and has network mode `none`. If the pin changes, retire the previous local Environment container or choose a new container name before enabling the new pin.
+
 The deterministic Thread test runs in required CI. To also run the real rootless Podman path, set `ALFRED_SEARXNG_PODMAN=1`, `ALFRED_SEARXNG_IMAGE=sha256:<id>`, and any needed `ALFRED_PODMAN_PATH` / `ALFRED_PODMAN_CONNECTION`, then run:
 
 ```sh

@@ -18,11 +18,6 @@ const SYNTHETIC_ENDPOINT = "http://127.0.0.1:8080";
 const CONTAINER_LABEL = "io.alfred.connector";
 const CONTAINER_LABEL_VALUE = "searxng";
 
-export const SEARXNG_SEARCH_CONTRACT = {
-  tool: SEARCH_TOOL_NAME,
-  risk: "read",
-} as const;
-
 export interface SearxngRuntimeConfig {
   enabled: boolean;
   image?: string;
@@ -34,6 +29,7 @@ export interface SearxngRuntimeConfig {
 
 export interface SearxngConnector {
   extension: ReturnType<typeof defineExtension>;
+  searchToolContract: { tool: string; risk: RiskLevel };
   environment(): Promise<ExecutionEnv>;
   close(): Promise<void>;
 }
@@ -67,21 +63,46 @@ export function createSearxngConnector(config: SearxngRuntimeConfig): SearxngCon
       if (rootless.stdout.trim() !== "true") {
         throw new Error("Podman is not using a rootless engine.");
       }
+      const configuredImage = await execFileAsync(
+        podman,
+        [...prefix, "image", "inspect", "--format", "{{.Id}}", image],
+        { timeout: 15_000 },
+      ).catch((error: unknown) => {
+        throw new Error("The configured pinned SearXNG image is not available locally.", {
+          cause: error,
+        });
+      });
+      const configuredImageId = configuredImage.stdout
+        .trim()
+        .toLowerCase()
+        .replace(/^sha256:/, "");
       const inspected = await execFileAsync(
         podman,
         [
           ...prefix,
           "inspect",
+          "--type",
+          "container",
           "--format",
-          `{{.State.Running}}|{{index .Config.Labels "${CONTAINER_LABEL}"}}`,
+          `{{.State.Running}}|{{.Image}}|{{.HostConfig.NetworkMode}}|{{index .Config.Labels "${CONTAINER_LABEL}"}}`,
           containerName,
         ],
         { timeout: 15_000 },
       ).catch(() => undefined);
       if (inspected !== undefined) {
-        const [running, ownerLabel] = inspected.stdout.trim().split("|");
+        const [running, actualImageId, networkMode, ownerLabel] = inspected.stdout
+          .trim()
+          .split("|");
         if (ownerLabel !== CONTAINER_LABEL_VALUE) {
           throw new Error("The configured SearXNG container name is already in use.");
+        }
+        if (actualImageId?.toLowerCase().replace(/^sha256:/, "") !== configuredImageId) {
+          throw new Error(
+            "The existing SearXNG Environment uses a different pinned image. Retire it or choose a new container name before enabling the configured pin.",
+          );
+        }
+        if (networkMode !== "none") {
+          throw new Error("The existing SearXNG Environment must use network mode none.");
         }
         if (running !== "true") {
           await execFileAsync(podman, [...prefix, "start", containerName], { timeout: 30_000 });
@@ -221,10 +242,10 @@ export function createSearxngConnector(config: SearxngRuntimeConfig): SearxngCon
   }
 
   const tool = {
-    name: SEARXNG_SEARCH_CONTRACT.tool,
+    name: SEARCH_TOOL_NAME,
     description: "Search the configured synthetic SearXNG endpoint. Risk level: read.",
     parameters: obj({ query: str({ minLength: 1, maxLength: 500 }) }),
-    risk: "read",
+    risk: "read" as const,
     replay: "unsafe",
     execute: async ({ query }) => ({
       output: [{ type: "text", text: await search(query) }],
@@ -237,6 +258,7 @@ export function createSearxngConnector(config: SearxngRuntimeConfig): SearxngCon
 
   return {
     extension,
+    searchToolContract: { tool: tool.name, risk: tool.risk },
     async environment() {
       await ensureContainer();
       connection ??= new Connection({
@@ -282,8 +304,4 @@ export function createSearxngConnector(config: SearxngRuntimeConfig): SearxngCon
       }
     },
   };
-}
-
-export function searxngRiskLevel(): RiskLevel {
-  return "read";
 }
