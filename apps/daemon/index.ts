@@ -7,6 +7,12 @@ export {
   type SubmitInput,
   type SubmitResult,
 } from "./lib/agent-runtime.ts";
+export {
+  createPiDurableAgentRuntime,
+  type AgentModelRef,
+  type AgentRetryOptions,
+  type PiDurableAgentRuntimeOptions,
+} from "./lib/pi-durable-runtime.ts";
 export { describeDaemon } from "./lib/describe.ts";
 export {
   startDaemonServer,
