@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-import 'app.dart';
+import 'health_screen.dart';
 import 'ws_client.dart';
 import 'ws_protocol.dart';
 
@@ -97,7 +97,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         final ThreadConnectionStatus status = _client.status;
         final String agentName = thread?.agentName ?? kDefaultMainAgentName;
         final bool canReconnect =
-            status == ThreadConnectionStatus.offline ||
+            status == ThreadConnectionStatus.disconnected ||
             status == ThreadConnectionStatus.error;
 
         return Scaffold(
@@ -127,6 +127,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
             children: <Widget>[
               if (_client.errorMessage != null)
                 _ErrorBanner(message: _client.errorMessage!),
+              if (_client.turnErrorMessage != null)
+                _ErrorBanner(
+                  message:
+                      '$agentName could not finish the last reply: ${_client.turnErrorMessage!}',
+                ),
               Expanded(child: _buildMessages(thread, status)),
               _buildComposer(agentName, status),
             ],
@@ -146,7 +151,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
           'Send a message to start a Thread with ${thread?.agentName ?? kDefaultMainAgentName}.',
         ThreadConnectionStatus.streaming => 'Alfred is responding...',
         ThreadConnectionStatus.reconnecting => 'Reconnecting to daemon...',
-        ThreadConnectionStatus.offline => 'Offline — unable to reach daemon.',
+        ThreadConnectionStatus.disconnected =>
+          'Disconnected — unable to reach daemon.',
         ThreadConnectionStatus.error => 'Unable to load Thread.',
       };
       return Center(
@@ -214,7 +220,7 @@ class _StatusChip extends StatelessWidget {
       ThreadConnectionStatus.connecting => colors.secondaryContainer,
       ThreadConnectionStatus.streaming => colors.tertiaryContainer,
       ThreadConnectionStatus.reconnecting => colors.secondaryContainer,
-      ThreadConnectionStatus.offline => colors.surfaceContainerHighest,
+      ThreadConnectionStatus.disconnected => colors.surfaceContainerHighest,
       ThreadConnectionStatus.error => colors.errorContainer,
     };
     final Color foreground = switch (status) {
@@ -222,7 +228,7 @@ class _StatusChip extends StatelessWidget {
       ThreadConnectionStatus.connecting => colors.onSecondaryContainer,
       ThreadConnectionStatus.streaming => colors.onTertiaryContainer,
       ThreadConnectionStatus.reconnecting => colors.onSecondaryContainer,
-      ThreadConnectionStatus.offline => colors.onSurfaceVariant,
+      ThreadConnectionStatus.disconnected => colors.onSurfaceVariant,
       ThreadConnectionStatus.error => colors.onErrorContainer,
     };
 

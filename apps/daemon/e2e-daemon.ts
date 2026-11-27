@@ -9,7 +9,12 @@ import {
   type AssistantMessageEventStream,
   type Context as AiContext,
 } from "@earendil-works/pi-ai";
-import { createPiDurableAgentRuntime, startDaemonServer, type AgentRuntime } from "./index.ts";
+import {
+  createPiDurableAgentRuntime,
+  installSignalShutdown,
+  startDaemonServer,
+  type AgentRuntime,
+} from "./index.ts";
 
 interface ControlledStream {
   stream: AssistantMessageEventStream;
@@ -53,7 +58,7 @@ function makeAssistantMessage(
   };
 }
 
-function extractLastUserText(context: AiContext): string {
+function extractLastOwnerText(context: AiContext): string {
   for (let i = context.messages.length - 1; i >= 0; i -= 1) {
     const msg = context.messages[i];
     if (msg?.role === "user") {
@@ -116,7 +121,7 @@ let activeStream: ControlledStream | undefined;
 function startStream(_model: unknown, context: AiContext): AssistantMessageEventStream {
   callCount += 1;
   const currentCall = callCount;
-  const prompt = extractLastUserText(context);
+  const prompt = extractLastOwnerText(context);
   const stream = createAssistantMessageEventStream();
 
   if (mode === "auto") {
@@ -275,25 +280,9 @@ const agentRuntime: AgentRuntime = {
 const server = await startDaemonServer({ host, port, agentRuntime });
 emitEvent({ event: "listening", host, port: server.port });
 
-let shuttingDown = false;
-async function shutdown(signal: string): Promise<void> {
-  if (shuttingDown) {
-    return;
-  }
-  shuttingDown = true;
-  emitEvent({ event: "shutting_down", signal });
-  try {
-    await server.close();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`e2e-daemon shutdown error: ${message}\n`);
-    process.exitCode = 1;
-  }
-}
-
-process.once("SIGINT", () => {
-  void shutdown("SIGINT");
-});
-process.once("SIGTERM", () => {
-  void shutdown("SIGTERM");
+installSignalShutdown({
+  close: () => server.close(),
+  onSignal: (signal) => {
+    emitEvent({ event: "shutting_down", signal });
+  },
 });

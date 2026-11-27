@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:alfred_client/app.dart';
+import 'package:alfred_client/health_screen.dart';
 import 'package:alfred_client/daemon_health.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

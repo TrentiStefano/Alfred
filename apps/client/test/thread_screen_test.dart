@@ -292,7 +292,7 @@ void main() {
   );
 
   testWidgets(
-    'shows Reconnecting then Offline when reconnect attempts exhaust and reconnects on tap',
+    'shows Reconnecting then Disconnected when reconnect attempts exhaust and reconnects on tap',
     (WidgetTester tester) async {
       final List<_FakeWebSocketChannel> channels = <_FakeWebSocketChannel>[];
 
@@ -334,10 +334,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 25));
       expect(channels, hasLength(2));
 
-      // Attempt #2 also drops before handshake; attempts exhausted -> Offline.
+      // Attempt #2 also drops before handshake; attempts exhausted -> Disconnected.
       channels[1].closeFromServer(1006, 'connection_lost');
       await tester.pump();
-      expect(find.text('Offline'), findsOneWidget);
+      expect(find.text('Disconnected'), findsOneWidget);
       expect(find.widgetWithText(OutlinedButton, 'Reconnect'), findsOneWidget);
 
       // Manual Reconnect button opens attempt #3 and recovers.
@@ -508,9 +508,33 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.text('Error'), findsOneWidget);
+      // A failed turn is not a dropped connection: stay Connected, no Reconnect button,
+      // show the turn error in the Thread and a banner, and keep the composer usable.
+      expect(find.text('Connected'), findsOneWidget);
+      expect(find.text('Error'), findsNothing);
+      expect(find.widgetWithText(OutlinedButton, 'Reconnect'), findsNothing);
       expect(find.text('Model request failed.'), findsOneWidget);
+      expect(
+        find.text(
+          'Alfred could not finish the last reply: Model request failed.',
+        ),
+        findsOneWidget,
+      );
       expect(tester.widget<TextField>(find.byType(TextField)).enabled, isTrue);
+
+      // Sending the next prompt clears the turn error banner.
+      await tester.enterText(find.byType(TextField), 'Try again');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, 'Send'));
+      await tester.pump();
+      final ClientMessage retry = await fakeChannel.nextClientMessage();
+      expect(retry, isA<ClientSubmitMessage>());
+      expect(
+        find.text(
+          'Alfred could not finish the last reply: Model request failed.',
+        ),
+        findsNothing,
+      );
 
       await tester.pumpWidget(const SizedBox.shrink());
     },

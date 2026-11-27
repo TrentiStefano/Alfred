@@ -7,7 +7,6 @@ export interface MainAgentDefinition {
   name: string;
   description: string;
   model?: string;
-  tools?: string[];
   instructions: string;
   sourcePath: string;
 }
@@ -16,7 +15,6 @@ type AgentFrontmatter = {
   name?: unknown;
   description?: unknown;
   model?: unknown;
-  tools?: unknown;
 };
 
 const DEFAULT_AGENTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "agents");
@@ -24,15 +22,6 @@ const DEFAULT_AGENTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), ".."
 export interface ResolveMainAgentOptions {
   explicitPath?: string;
   agentsDir?: string;
-}
-
-function parseToolList(value: unknown): string[] | undefined {
-  const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
-  const tools = raw
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-  return tools.length > 0 ? tools : undefined;
 }
 
 /** Resolve the Main Agent Markdown path: explicit option -> env var -> main.local.md -> main.example.md. */
@@ -98,13 +87,11 @@ export function loadMainAgentDefinition(
     typeof frontmatter.model === "string" && frontmatter.model.trim().length > 0
       ? frontmatter.model.trim()
       : undefined;
-  const tools = parseToolList(frontmatter.tools);
 
   return {
     name,
     description,
     ...(model !== undefined ? { model } : {}),
-    ...(tools !== undefined ? { tools } : {}),
     instructions: body.trim(),
     sourcePath,
   };

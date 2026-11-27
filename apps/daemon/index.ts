@@ -18,6 +18,11 @@ export {
 } from "./lib/pi-durable-runtime.ts";
 export { describeDaemon } from "./lib/describe.ts";
 export {
+  installSignalShutdown,
+  type ShutdownHost,
+  type SignalShutdownOptions,
+} from "./lib/shutdown.ts";
+export {
   startDaemonServer,
   type DaemonServer,
   type DaemonServerOptions,

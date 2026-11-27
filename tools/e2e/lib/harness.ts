@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -12,6 +12,33 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", 
 export const DAEMON_E2E_SCRIPT = resolve(REPO_ROOT, "apps", "daemon", "e2e-daemon.ts");
 export const CLIENT_DIR = resolve(REPO_ROOT, "apps", "client");
 export const WEB_BUILD_DIR = resolve(CLIENT_DIR, "build", "web");
+
+/** Inputs whose changes make a compiled Flutter Web bundle out of date. */
+const WEB_BUILD_INPUTS = [join(CLIENT_DIR, "lib"), join(CLIENT_DIR, "web")];
+const WEB_BUILD_INPUT_FILES = [join(CLIENT_DIR, "pubspec.yaml"), join(CLIENT_DIR, "pubspec.lock")];
+
+function newestMtimeMs(path: string): number {
+  if (!existsSync(path)) return 0;
+  const stat = statSync(path);
+  if (!stat.isDirectory()) return stat.mtimeMs;
+  let newest = 0;
+  for (const entry of readdirSync(path)) {
+    newest = Math.max(newest, newestMtimeMs(join(path, entry)));
+  }
+  return newest;
+}
+
+/**
+ * True when `build/web/index.html` is missing or older than any client source, so E2E never
+ * runs against a stale bundle (which shows up as a misleading connection timeout).
+ */
+export function isWebBuildStale(webBuildDir = WEB_BUILD_DIR): boolean {
+  const indexHtml = join(webBuildDir, "index.html");
+  if (!existsSync(indexHtml)) return true;
+  const builtAt = statSync(indexHtml).mtimeMs;
+  const sourcesAt = Math.max(...[...WEB_BUILD_INPUTS, ...WEB_BUILD_INPUT_FILES].map(newestMtimeMs));
+  return sourcesAt > builtAt;
+}
 
 export interface DaemonEvent {
   event: string;

@@ -1,17 +1,10 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import {
-  createModels,
-  type AssistantMessage,
-  type Models,
-  type UserMessage,
-} from "@earendil-works/pi-ai";
+import { createModels, type Models } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
-  AssistantEntry,
   Harness,
-  UserEntry,
   createRegistry,
   type AgentChange,
   type Conversation,
@@ -20,14 +13,12 @@ import {
   type HarnessSettings,
   type LiveState,
   type ModelRef,
-  type RunFailure,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import {
   DEFAULT_MAIN_THREAD_ID,
   type DeltaEvent,
   type ThreadMessage,
-  type ThreadMessageStatus,
   type ThreadSnapshot,
   type ThreadStatus,
 } from "@alfred/protocol";
@@ -40,9 +31,14 @@ import {
   type ThreadDeltaEvent,
   type ThreadSubscription,
 } from "./agent-runtime.ts";
+import {
+  ALFRED_OWNER_ENTRY_KIND,
+  projectEntry,
+  projectLiveGeneration,
+  projectRunFailure,
+} from "./pi-projection.ts";
 import { sanitizeErrorMessage } from "./sanitize-error.ts";
 
-const ALFRED_USER_ENTRY_KIND = "alfred.user";
 const ENTRY_SCAN_PAGE_SIZE = 256;
 const WATCH_WINDOW_MIN = 200;
 const WATCH_WINDOW_MAX = 400;
@@ -77,37 +73,6 @@ export interface PiDurableAgentRuntimeOptions {
   sqlitePrefix?: string;
 }
 
-function extractUserText(message: UserMessage): string {
-  if (typeof message.content === "string") {
-    return message.content;
-  }
-  return message.content
-    .filter(
-      (block): block is Extract<(typeof message.content)[number], { type: "text" }> =>
-        block.type === "text",
-    )
-    .map((block) => block.text)
-    .join("");
-}
-
-function extractAssistantText(content: AssistantMessage["content"]): string {
-  return content
-    .filter(
-      (block): block is Extract<AssistantMessage["content"][number], { type: "text" }> =>
-        block.type === "text",
-    )
-    .map((block) => block.text)
-    .join("");
-}
-
-function extractRequestId(data: EntryRecord["data"]): string | undefined {
-  if (typeof data !== "object" || data === null || Array.isArray(data)) {
-    return undefined;
-  }
-  const value = data.requestId;
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 function resolveModelRef(spec: string | undefined, models: Models): ModelRef | undefined {
   if (spec === undefined) {
     return undefined;
@@ -130,29 +95,6 @@ function resolveModelRef(spec: string | undefined, models: Models): ModelRef | u
   return { provider: "unconfigured", modelId: trimmed };
 }
 
-function formatRunFailureMessage(failure: RunFailure, modelsInitError: string | undefined): string {
-  if (failure.reason === "no_model" && modelsInitError !== undefined) {
-    return sanitizeErrorMessage(modelsInitError, "Model configuration could not be loaded.");
-  }
-  switch (failure.reason) {
-    case "model_error":
-    case "no_model":
-    case "faulted":
-    case "interrupted":
-    case "restart_limit":
-    case "turn_limit":
-      return sanitizeErrorMessage(failure.detail ?? "", "Model request failed.");
-    case "aborted":
-      return sanitizeErrorMessage(failure.detail ?? "", "Response interrupted.");
-    case "reset":
-      return "Thread was reset before the response completed.";
-    case "orphaned":
-      return "Run could not resume after restart.";
-    case "nothing_to_answer":
-      return "Nothing to answer.";
-  }
-}
-
 function mapEntriesToMessages(
   entries: readonly EntryRecord[],
   live: LiveState | undefined,
@@ -163,99 +105,52 @@ function mapEntriesToMessages(
   let lastCreatedAt: string | undefined;
 
   for (const entry of entries) {
-    if (entry.kind === ALFRED_USER_ENTRY_KIND || UserEntry.is(entry)) {
-      const userMsg = entry.model?.[0];
-      if (userMsg?.role !== "user") {
-        continue;
-      }
-      const createdAt = new Date(userMsg.timestamp).toISOString();
-      lastCreatedAt = createdAt;
-      const requestId = extractRequestId(entry.data);
-      messages.push({
-        id: `entry-${String(entry.id)}`,
-        role: "owner",
-        text: extractUserText(userMsg),
-        status: "complete",
-        ...(requestId !== undefined ? { requestId } : {}),
-        createdAt,
-      });
+    const projected = projectEntry(entry);
+    if (projected === undefined) {
       continue;
     }
-
-    if (AssistantEntry.is(entry)) {
-      const assistantMsg = entry.model?.[0];
-      if (assistantMsg?.role !== "assistant") {
-        continue;
-      }
-      const createdAt = new Date(assistantMsg.timestamp).toISOString();
-      lastCreatedAt = createdAt;
-      const text = extractAssistantText(assistantMsg.content);
-
-      let status: ThreadMessageStatus;
-      let displayText: string;
-      if (assistantMsg.stopReason === "error") {
-        status = "error";
-        const rawError =
-          text.trim().length > 0 ? text : (assistantMsg.errorMessage ?? "Model request failed.");
-        displayText = sanitizeErrorMessage(rawError);
-        lastTerminalAssistantEntryId = entry.id;
-      } else if (assistantMsg.stopReason === "aborted") {
-        status = "interrupted";
-        const rawAborted =
-          text.trim().length > 0 ? text : (assistantMsg.errorMessage ?? "Response interrupted.");
-        displayText = sanitizeErrorMessage(rawAborted, "Response interrupted.");
-        lastTerminalAssistantEntryId = entry.id;
-      } else if (assistantMsg.stopReason === "toolUse" && text.trim().length === 0) {
-        continue;
-      } else {
-        status = "complete";
-        displayText = text;
-        lastTerminalAssistantEntryId = entry.id;
-      }
-
+    lastCreatedAt = projected.createdAt;
+    if (projected.kind === "owner") {
       messages.push({
-        id: `entry-${String(entry.id)}`,
+        id: projected.messageId,
+        role: "owner",
+        text: projected.text,
+        status: "complete",
+        ...(projected.requestId !== undefined ? { requestId: projected.requestId } : {}),
+        createdAt: projected.createdAt,
+      });
+    } else if (projected.kind === "agent") {
+      lastTerminalAssistantEntryId = projected.entryId;
+      messages.push({
+        id: projected.messageId,
         role: "agent",
-        text: displayText,
-        status,
-        createdAt,
+        text: projected.text,
+        status: projected.status,
+        createdAt: projected.createdAt,
       });
     }
   }
 
-  if (live?.run !== undefined && live.generation?.message !== undefined) {
-    const partialText = extractAssistantText(live.generation.message.content);
-    if (partialText.length > 0) {
-      messages.push({
-        id: `live-gen-${String(live.run.taskId)}-a${String(live.generation.attempt)}`,
-        role: "agent",
-        text: partialText,
-        status: "streaming",
-        createdAt: new Date(live.generation.message.timestamp).toISOString(),
-      });
-    }
+  const generation = projectLiveGeneration(live);
+  if (generation !== undefined) {
+    messages.push({
+      id: generation.messageId,
+      role: "agent",
+      text: generation.text,
+      status: "streaming",
+      createdAt: generation.createdAt,
+    });
   }
 
-  if (live?.runFailure !== undefined) {
-    const failureFirst = live.runFailure.first;
-    const failureAlreadyInTranscript =
-      failureFirst !== undefined &&
-      lastTerminalAssistantEntryId !== undefined &&
-      lastTerminalAssistantEntryId >= failureFirst;
-
-    if (!failureAlreadyInTranscript) {
-      const status: ThreadMessageStatus =
-        live.runFailure.reason === "aborted" || live.runFailure.reason === "interrupted"
-          ? "interrupted"
-          : "error";
-      messages.push({
-        id: `failure-${String(live.runFailure.taskId)}`,
-        role: "agent",
-        text: formatRunFailureMessage(live.runFailure, modelsInitError),
-        status,
-        createdAt: lastCreatedAt ?? new Date().toISOString(),
-      });
-    }
+  const failure = projectRunFailure(live, lastTerminalAssistantEntryId, modelsInitError);
+  if (failure !== undefined) {
+    messages.push({
+      id: failure.messageId,
+      role: "agent",
+      text: failure.message,
+      status: failure.status,
+      createdAt: lastCreatedAt ?? new Date().toISOString(),
+    });
   }
 
   return messages;
@@ -428,37 +323,23 @@ export async function createPiDurableAgentRuntime(
   // Seed state from persisted transcript before starting the live watcher.
   for (const entry of cachedEntries) {
     lastProcessedEntryId = Math.max(lastProcessedEntryId, entry.id);
-    if (entry.kind === ALFRED_USER_ENTRY_KIND || UserEntry.is(entry)) {
-      const userMsg = entry.model?.[0];
-      if (userMsg?.role === "user") {
-        lastCreatedAt = new Date(userMsg.timestamp).toISOString();
-      }
+    const projected = projectEntry(entry);
+    if (projected === undefined) {
       continue;
     }
-    if (AssistantEntry.is(entry)) {
-      const assistantMsg = entry.model?.[0];
-      if (assistantMsg?.role !== "assistant") {
-        continue;
-      }
-      lastCreatedAt = new Date(assistantMsg.timestamp).toISOString();
-      const text = extractAssistantText(assistantMsg.content);
-      if (assistantMsg.stopReason !== "toolUse" || text.trim().length > 0) {
-        lastTerminalAssistantEntryId = entry.id;
-      }
+    lastCreatedAt = projected.createdAt;
+    if (projected.kind === "agent") {
+      lastTerminalAssistantEntryId = projected.entryId;
     }
   }
-  if (cachedLive?.run !== undefined && cachedLive.generation?.message !== undefined) {
-    const partialText = extractAssistantText(cachedLive.generation.message.content);
-    if (partialText.length > 0) {
-      const taskId = String(cachedLive.run.taskId);
-      const attempt = cachedLive.generation.attempt;
-      activeGeneration = {
-        taskId,
-        attempt,
-        messageId: `live-gen-${taskId}-a${String(attempt)}`,
-        emittedText: partialText,
-      };
-    }
+  const seededGeneration = projectLiveGeneration(cachedLive);
+  if (seededGeneration !== undefined) {
+    activeGeneration = {
+      taskId: seededGeneration.taskId,
+      attempt: seededGeneration.attempt,
+      messageId: seededGeneration.messageId,
+      emittedText: seededGeneration.text,
+    };
   }
   if (cachedLive?.runFailure !== undefined) {
     lastEmittedFailureTaskId = String(cachedLive.runFailure.taskId);
@@ -497,194 +378,154 @@ export async function createPiDurableAgentRuntime(
       }
       lastProcessedEntryId = entry.id;
 
-      if (entry.kind === ALFRED_USER_ENTRY_KIND || UserEntry.is(entry)) {
-        const userMsg = entry.model?.[0];
-        if (userMsg?.role !== "user") {
-          continue;
-        }
-        const createdAt = new Date(userMsg.timestamp).toISOString();
-        lastCreatedAt = createdAt;
-        const messageId = `entry-${String(entry.id)}`;
-        const requestId = extractRequestId(entry.data);
+      const projected = projectEntry(entry);
+      if (projected === undefined) {
+        continue;
+      }
+      lastCreatedAt = projected.createdAt;
+
+      if (projected.kind === "owner") {
         emitDelta({
           kind: "turn_start",
-          messageId,
+          messageId: projected.messageId,
           role: "owner",
-          text: extractUserText(userMsg),
-          ...(requestId !== undefined ? { requestId } : {}),
-          createdAt,
+          text: projected.text,
+          ...(projected.requestId !== undefined ? { requestId: projected.requestId } : {}),
+          createdAt: projected.createdAt,
         });
         emitDelta({
           kind: "turn_finish",
-          messageId,
+          messageId: projected.messageId,
           status: "complete",
         });
         continue;
       }
 
-      if (AssistantEntry.is(entry)) {
-        const assistantMsg = entry.model?.[0];
-        if (assistantMsg?.role !== "assistant") {
-          continue;
-        }
-        const createdAt = new Date(assistantMsg.timestamp).toISOString();
-        lastCreatedAt = createdAt;
-        const text = extractAssistantText(assistantMsg.content);
-
-        if (assistantMsg.stopReason === "toolUse" && text.trim().length === 0) {
-          if (activeGeneration !== undefined) {
-            emitDelta({
-              kind: "turn_finish",
-              messageId: activeGeneration.messageId,
-              status: "complete",
-            });
-            activeGeneration = undefined;
-          }
-          continue;
-        }
-
-        const messageId = activeGeneration?.messageId ?? `entry-${String(entry.id)}`;
-        if (activeGeneration === undefined) {
-          emitDelta({
-            kind: "turn_start",
-            messageId,
-            role: "agent",
-            createdAt,
-          });
-        }
-
-        if (assistantMsg.stopReason === "error") {
-          const rawError =
-            text.trim().length > 0 ? text : (assistantMsg.errorMessage ?? "Model request failed.");
-          emitDelta({
-            kind: "turn_error",
-            messageId,
-            status: "error",
-            message: sanitizeErrorMessage(rawError),
-          });
-        } else if (assistantMsg.stopReason === "aborted") {
-          const rawAborted =
-            text.trim().length > 0 ? text : (assistantMsg.errorMessage ?? "Response interrupted.");
-          emitDelta({
-            kind: "turn_error",
-            messageId,
-            status: "interrupted",
-            message: sanitizeErrorMessage(rawAborted, "Response interrupted."),
-          });
-        } else {
-          const alreadyEmitted = activeGeneration?.emittedText ?? "";
-          const remaining = text.startsWith(alreadyEmitted)
-            ? text.slice(alreadyEmitted.length)
-            : text;
-          if (remaining.length > 0) {
-            emitDelta({
-              kind: "text_delta",
-              messageId,
-              delta: remaining,
-            });
-          }
+      if (projected.kind === "agent_tool_use") {
+        if (activeGeneration !== undefined) {
           emitDelta({
             kind: "turn_finish",
-            messageId,
-            status: "complete",
-          });
-        }
-
-        lastTerminalAssistantEntryId = entry.id;
-        activeGeneration = undefined;
-      }
-    }
-
-    if (live?.run !== undefined && live.generation?.message !== undefined) {
-      const partialText = extractAssistantText(live.generation.message.content);
-      if (partialText.length > 0) {
-        const runTaskId = String(live.run.taskId);
-        const attempt = live.generation.attempt;
-        if (
-          activeGeneration !== undefined &&
-          (activeGeneration.taskId !== runTaskId || activeGeneration.attempt !== attempt)
-        ) {
-          emitDelta({
-            kind: "turn_error",
             messageId: activeGeneration.messageId,
-            status: "interrupted",
-            message: "Response interrupted.",
+            status: "complete",
           });
           activeGeneration = undefined;
         }
-        if (activeGeneration === undefined) {
-          const messageId = `live-gen-${runTaskId}-a${String(attempt)}`;
-          const createdAt = new Date(live.generation.message.timestamp).toISOString();
-          activeGeneration = {
-            taskId: runTaskId,
-            attempt,
-            messageId,
-            emittedText: partialText,
-          };
-          emitDelta({
-            kind: "turn_start",
-            messageId,
-            role: "agent",
-            createdAt,
-          });
-          emitDelta({
-            kind: "text_delta",
-            messageId,
-            delta: partialText,
-          });
-        } else if (
-          partialText.length > activeGeneration.emittedText.length &&
-          partialText.startsWith(activeGeneration.emittedText)
-        ) {
-          const delta = partialText.slice(activeGeneration.emittedText.length);
-          activeGeneration.emittedText = partialText;
+        continue;
+      }
+
+      const messageId = activeGeneration?.messageId ?? projected.messageId;
+      if (activeGeneration === undefined) {
+        emitDelta({
+          kind: "turn_start",
+          messageId,
+          role: "agent",
+          createdAt: projected.createdAt,
+        });
+      }
+
+      if (projected.status === "complete") {
+        const alreadyEmitted = activeGeneration?.emittedText ?? "";
+        const remaining = projected.text.startsWith(alreadyEmitted)
+          ? projected.text.slice(alreadyEmitted.length)
+          : projected.text;
+        if (remaining.length > 0) {
           emitDelta({
             kind: "text_delta",
-            messageId: activeGeneration.messageId,
-            delta,
+            messageId,
+            delta: remaining,
           });
         }
+        emitDelta({
+          kind: "turn_finish",
+          messageId,
+          status: "complete",
+        });
+      } else {
+        emitDelta({
+          kind: "turn_error",
+          messageId,
+          status: projected.status,
+          message: projected.text,
+        });
+      }
+
+      lastTerminalAssistantEntryId = projected.entryId;
+      activeGeneration = undefined;
+    }
+
+    const generation = projectLiveGeneration(live);
+    if (generation !== undefined) {
+      if (
+        activeGeneration !== undefined &&
+        (activeGeneration.taskId !== generation.taskId ||
+          activeGeneration.attempt !== generation.attempt)
+      ) {
+        emitDelta({
+          kind: "turn_error",
+          messageId: activeGeneration.messageId,
+          status: "interrupted",
+          message: "Response interrupted.",
+        });
+        activeGeneration = undefined;
+      }
+      if (activeGeneration === undefined) {
+        activeGeneration = {
+          taskId: generation.taskId,
+          attempt: generation.attempt,
+          messageId: generation.messageId,
+          emittedText: generation.text,
+        };
+        emitDelta({
+          kind: "turn_start",
+          messageId: generation.messageId,
+          role: "agent",
+          createdAt: generation.createdAt,
+        });
+        emitDelta({
+          kind: "text_delta",
+          messageId: generation.messageId,
+          delta: generation.text,
+        });
+      } else if (
+        generation.text.length > activeGeneration.emittedText.length &&
+        generation.text.startsWith(activeGeneration.emittedText)
+      ) {
+        const delta = generation.text.slice(activeGeneration.emittedText.length);
+        activeGeneration.emittedText = generation.text;
+        emitDelta({
+          kind: "text_delta",
+          messageId: activeGeneration.messageId,
+          delta,
+        });
       }
     }
 
     if (live?.runFailure !== undefined) {
-      const failureFirst = live.runFailure.first;
-      const failureAlreadyInTranscript =
-        failureFirst !== undefined &&
-        lastTerminalAssistantEntryId !== undefined &&
-        lastTerminalAssistantEntryId >= failureFirst;
-      const failureTaskId = String(live.runFailure.taskId);
-
-      if (!failureAlreadyInTranscript && lastEmittedFailureTaskId !== failureTaskId) {
-        const status =
-          live.runFailure.reason === "aborted" || live.runFailure.reason === "interrupted"
-            ? "interrupted"
-            : "error";
-        const message = formatRunFailureMessage(live.runFailure, modelsInitError);
+      const failure = projectRunFailure(live, lastTerminalAssistantEntryId, modelsInitError);
+      if (failure !== undefined && lastEmittedFailureTaskId !== failure.taskId) {
         if (activeGeneration !== undefined) {
           emitDelta({
             kind: "turn_error",
             messageId: activeGeneration.messageId,
-            status,
-            message,
+            status: failure.status,
+            message: failure.message,
           });
           activeGeneration = undefined;
         } else {
-          const messageId = `failure-${failureTaskId}`;
           emitDelta({
             kind: "turn_start",
-            messageId,
+            messageId: failure.messageId,
             role: "agent",
             createdAt: lastCreatedAt ?? new Date().toISOString(),
           });
           emitDelta({
             kind: "turn_error",
-            messageId,
-            status,
-            message,
+            messageId: failure.messageId,
+            status: failure.status,
+            message: failure.message,
           });
         }
-        lastEmittedFailureTaskId = failureTaskId;
+        lastEmittedFailureTaskId = failure.taskId;
       }
     } else {
       lastEmittedFailureTaskId = undefined;
@@ -784,7 +625,7 @@ export async function createPiDurableAgentRuntime(
           content: input.text,
           requestId: input.requestId,
           entry: {
-            kind: ALFRED_USER_ENTRY_KIND,
+            kind: ALFRED_OWNER_ENTRY_KIND,
             data: { requestId: input.requestId },
           },
         });

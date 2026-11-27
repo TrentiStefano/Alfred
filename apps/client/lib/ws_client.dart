@@ -15,7 +15,7 @@ enum ThreadConnectionStatus {
   connected('Connected'),
   streaming('Streaming'),
   reconnecting('Reconnecting'),
-  offline('Offline'),
+  disconnected('Disconnected'),
   error('Error');
 
   const ThreadConnectionStatus(this.label);
@@ -86,16 +86,22 @@ class AlfredWsClient extends ChangeNotifier {
   bool _fatalProtocolError = false;
   int _reconnectAttempt = 0;
 
-  ThreadConnectionStatus _status = ThreadConnectionStatus.offline;
+  ThreadConnectionStatus _status = ThreadConnectionStatus.disconnected;
   ThreadSnapshot? _thread;
   int? _lastSeq;
   String? _errorMessage;
+  String? _turnErrorMessage;
   PendingSubmission? _pendingSubmission;
 
   ThreadConnectionStatus get status => _status;
   ThreadSnapshot? get thread => _thread;
   int? get lastSeq => _lastSeq;
+
+  /// Connection-level problem (handshake, transport, protocol). Shown with a Reconnect action.
   String? get errorMessage => _errorMessage;
+
+  /// The last turn failed (provider, auth, interrupted) while the socket stayed open.
+  String? get turnErrorMessage => _turnErrorMessage;
   String? get pendingRequestId => _pendingSubmission?.requestId;
   bool get canSubmit =>
       !_disposed &&
@@ -207,19 +213,23 @@ class AlfredWsClient extends ChangeNotifier {
     }
   }
 
+  void _handleProtocolVersionMismatch(int actualVersion) {
+    _fatalProtocolError = true;
+    _allowAutoReconnect = false;
+    _cancelReconnectTimer();
+    _status = ThreadConnectionStatus.error;
+    _errorMessage =
+        'Incompatible protocol v$actualVersion (expected v$kExpectedProtocolVersion).';
+    unawaited(_closeCurrentChannel());
+    notifyListeners();
+  }
+
   void _handleSnapshot(
     WebSocketChannel channel,
     DaemonSnapshotMessage message,
   ) {
     if (message.protocolVersion != kExpectedProtocolVersion) {
-      _fatalProtocolError = true;
-      _allowAutoReconnect = false;
-      _cancelReconnectTimer();
-      _status = ThreadConnectionStatus.error;
-      _errorMessage =
-          'Incompatible protocol v${message.protocolVersion} (expected v$kExpectedProtocolVersion).';
-      unawaited(_closeCurrentChannel());
-      notifyListeners();
+      _handleProtocolVersionMismatch(message.protocolVersion);
       return;
     }
 
@@ -228,11 +238,13 @@ class AlfredWsClient extends ChangeNotifier {
     _thread = message.thread;
     _lastSeq = message.seq;
     _errorMessage = null;
-    _status = switch (message.thread.status) {
-      ThreadStatus.idle => ThreadConnectionStatus.connected,
-      ThreadStatus.streaming => ThreadConnectionStatus.streaming,
-      ThreadStatus.error => ThreadConnectionStatus.error,
-    };
+    // A Thread whose last turn failed is still reachable: the connection is fine.
+    _status = message.thread.status == ThreadStatus.streaming
+        ? ThreadConnectionStatus.streaming
+        : ThreadConnectionStatus.connected;
+    _turnErrorMessage = message.thread.status == ThreadStatus.error
+        ? _lastAgentText(message.thread)
+        : null;
 
     final PendingSubmission? pending = _pendingSubmission;
     if (pending != null && pending.threadId == message.thread.id) {
@@ -256,14 +268,7 @@ class AlfredWsClient extends ChangeNotifier {
 
   void _handleDelta(WebSocketChannel channel, DaemonDeltaMessage message) {
     if (message.protocolVersion != kExpectedProtocolVersion) {
-      _fatalProtocolError = true;
-      _allowAutoReconnect = false;
-      _cancelReconnectTimer();
-      _status = ThreadConnectionStatus.error;
-      _errorMessage =
-          'Incompatible protocol v${message.protocolVersion} (expected v$kExpectedProtocolVersion).';
-      unawaited(_closeCurrentChannel());
-      notifyListeners();
+      _handleProtocolVersionMismatch(message.protocolVersion);
       return;
     }
 
@@ -286,6 +291,7 @@ class AlfredWsClient extends ChangeNotifier {
       currentThread?.messages ?? const <ThreadMessage>[],
     );
     ThreadConnectionStatus nextStatus = _status;
+    bool turnFailed = false;
 
     switch (message.event) {
       case DeltaTurnStartEvent(:final String messageId):
@@ -313,6 +319,7 @@ class AlfredWsClient extends ChangeNotifier {
         if (start.role == ThreadMessageRole.agent) {
           nextStatus = ThreadConnectionStatus.streaming;
           _errorMessage = null;
+          _turnErrorMessage = null;
         }
       case DeltaTextDeltaEvent(:final String messageId, :final String delta):
         final int index = messages.indexWhere(
@@ -397,26 +404,30 @@ class AlfredWsClient extends ChangeNotifier {
             ),
           );
         }
-        nextStatus = ThreadConnectionStatus.error;
+        // The turn failed, not the socket: stay connected so the Owner can send again.
+        nextStatus = ThreadConnectionStatus.connected;
+        turnFailed = true;
+        _turnErrorMessage = message;
     }
 
     _status = nextStatus;
     _thread = ThreadSnapshot(
       id: currentThread?.id ?? message.threadId,
       agentName: currentThread?.agentName ?? kDefaultMainAgentName,
-      status: switch (nextStatus) {
-        ThreadConnectionStatus.streaming => ThreadStatus.streaming,
-        ThreadConnectionStatus.error => ThreadStatus.error,
-        _ => ThreadStatus.idle,
-      },
+      status: turnFailed
+          ? ThreadStatus.error
+          : nextStatus == ThreadConnectionStatus.streaming
+          ? ThreadStatus.streaming
+          : ThreadStatus.idle,
       messages: List<ThreadMessage>.unmodifiable(messages),
     );
     notifyListeners();
   }
 
   void _handleDaemonError(DaemonErrorMessage message) {
-    _errorMessage = _formatDaemonError(message);
+    final String formatted = _formatDaemonError(message);
     if (message.code == ProtocolErrorCode.unsupportedProtocolVersion) {
+      _errorMessage = formatted;
       _fatalProtocolError = true;
       _allowAutoReconnect = false;
       _cancelReconnectTimer();
@@ -424,13 +435,26 @@ class AlfredWsClient extends ChangeNotifier {
       unawaited(_closeCurrentChannel());
     } else if (!_handshaked ||
         message.code == ProtocolErrorCode.handshakeRequired) {
+      _errorMessage = formatted;
       _status = ThreadConnectionStatus.error;
+    } else {
+      // e.g. runtime_error / unknown_thread on a live, handshaked socket: a turn problem.
+      _turnErrorMessage = formatted;
     }
     if (message.requestId != null &&
         _pendingSubmission?.requestId == message.requestId) {
       _pendingSubmission = null;
     }
     notifyListeners();
+  }
+
+  static String? _lastAgentText(ThreadSnapshot thread) {
+    for (final ThreadMessage message in thread.messages.reversed) {
+      if (message.role == ThreadMessageRole.agent) {
+        return message.text.isEmpty ? null : message.text;
+      }
+    }
+    return null;
   }
 
   String _formatDaemonError(DaemonErrorMessage error) {
@@ -472,7 +496,7 @@ class AlfredWsClient extends ChangeNotifier {
     }
 
     if (!_allowAutoReconnect) {
-      _status = ThreadConnectionStatus.offline;
+      _status = ThreadConnectionStatus.disconnected;
       notifyListeners();
       return;
     }
@@ -487,7 +511,7 @@ class AlfredWsClient extends ChangeNotifier {
     _cancelReconnectTimer();
     _reconnectAttempt += 1;
     if (_reconnectAttempt > maxReconnectAttempts) {
-      _status = ThreadConnectionStatus.offline;
+      _status = ThreadConnectionStatus.disconnected;
       if (errorMessage != null) {
         _errorMessage = errorMessage;
       }
@@ -533,6 +557,8 @@ class AlfredWsClient extends ChangeNotifier {
       requestId: requestId,
       text: text,
     );
+    _errorMessage = null;
+    _turnErrorMessage = null;
     _pendingSubmission = PendingSubmission(
       threadId: threadId,
       requestId: requestId,

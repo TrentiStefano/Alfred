@@ -22,7 +22,7 @@ Copy the committed template to a gitignored local override:
 cp apps/daemon/agents/main.example.md apps/daemon/agents/main.local.md
 ```
 
-Edit `apps/daemon/agents/main.local.md` to select your Haiku 5.5 model from Pi (for example `anthropic/<haiku-5-5-model-id>` as listed by your Pi model catalog) and any personal system instructions.
+Edit `apps/daemon/agents/main.local.md` to select your Haiku 5.5 model from Pi (the committed example uses `anthropic/claude-haiku-5-5`; use the exact id your Pi model catalog lists) and any personal system instructions.
 
 ## 2. Start the Alfred daemon
 
