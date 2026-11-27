@@ -19,7 +19,6 @@ packages/plugin-sdk/       Connector contract, RiskLevel, contract test suite
 packages/connector-<name>/ native Connectors (flat, one package each)
 tools/eslint-plugin-alfred custom lint rules with prescriptive messages
 scripts/                   verify, lint-boundaries, check-repo
-specs/                     ephemeral specs `YYYY-MM-DD-feature.md`, archived on merge
 docs/adr/                  architectural decision records
 docs/agents/               skill config (issue tracker, triage labels, domain docs)
 ```
@@ -39,7 +38,7 @@ Real config (`.env`, `connectors.yaml`, compose files, Tailscale, provider auth)
 
 ## Workflow
 
-Non-trivial features: `/grill-with-docs` → `/to-spec` (into `specs/`) → `/to-tickets` → `/implement` → `/code-review`. After merging, `/retro`, and encode each recurring mistake as a rule in `tools/eslint-plugin-alfred` or `scripts/`.
+Non-trivial features: `/grill-with-docs` → `/to-spec` (a GitHub issue labelled `ready-for-agent`, closed when its PR merges) → `/to-tickets` → `/implement` → `/code-review`. After merging, `/retro`, and encode each recurring mistake as a rule in `tools/eslint-plugin-alfred` or `scripts/`.
 
 ## Pull requests & merges
 
