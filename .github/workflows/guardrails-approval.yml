@@ -13,9 +13,12 @@ permissions:
   actions: read
   pull-requests: write
 
-concurrency:
-  group: guardrails-approval-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# No `concurrency` group, on purpose. Every run of this workflow reports the same required
+# check ("Guardrail approval") on the same head commit, and GitHub judges the PR by the newest
+# one. With `cancel-in-progress`, re-running an older failed run right after adding the label
+# cancelled the label-triggered run, leaving a cancelled required check that blocked the merge
+# (PRs #25 and #27). Each run reads the current labels and pushes from the API, so parallel
+# runs are safe and all converge on the same answer.
 
 jobs:
   approval:
