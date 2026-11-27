@@ -16,6 +16,9 @@
     "@earendil-works/pi-ai": "1.6.1",
     "@earendil-works/pi-coding-agent": "1.6.1",
     "@earendil-works/pi-durable": "1.6.1",
+    "@earendil-works/pi-env": "1.6.1",
+    "@earendil-works/pi-mcp": "1.6.1",
+    "@earendil-works/pi-schema": "1.6.1",
     "ws": "8.23.0"
   },
   "devDependencies": {

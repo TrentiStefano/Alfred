@@ -3,11 +3,6 @@
 # The exact schema is decided in the plugin-sdk / daemon-core specs.
 
 connectors:
-  - id: searxng
-    kind: native
-    config:
-      baseUrl: https://searxng.example.invalid
-
   - id: home-assistant
     kind: mcp
     transport: http

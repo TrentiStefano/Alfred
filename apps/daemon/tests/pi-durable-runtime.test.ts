@@ -9,6 +9,7 @@ import {
   createProvider,
   fauxAssistantMessage,
   fauxProvider,
+  fauxToolCall,
   getSystemMessageText,
   type AssistantMessage,
   type AssistantMessageEventStream,
@@ -23,6 +24,7 @@ import {
   type DaemonMessage,
   type DeltaMessage,
 } from "@alfred/protocol";
+import { SEARXNG_SEARCH_CONTRACT } from "../index.ts";
 import {
   createPiDurableAgentRuntime,
   startDaemonServer,
@@ -143,6 +145,10 @@ describe("Pi Durable AgentRuntime over WebSocket", () => {
     }
   });
 
+  it("declares SearXNG web search as a read-risk Tool", () => {
+    expect(SEARXNG_SEARCH_CONTRACT).toEqual({ tool: "searxng_web_search", risk: "read" });
+  });
+
   it("persists Thread messages in SQLite across daemon restarts", async () => {
     const dir = makeTempDir();
     const sqlitePath = join(dir, "main.sqlite");
@@ -244,6 +250,178 @@ describe("Pi Durable AgentRuntime over WebSocket", () => {
 
     await client2.close();
   });
+
+  it("uses the configured SearXNG search Tool in the existing Thread", async () => {
+    const dir = makeTempDir();
+    const faux = fauxProvider({ tokensPerSecond: 10_000 });
+    const expectedSearch = "Synthetic result for Alfred";
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("searxng_web_search", { query: "Alfred" }, { id: "search-1" }),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        const result = context.messages.find(
+          (message) => message.role === "toolResult" && message.toolCallId === "search-1",
+        );
+        const firstContent = result?.role === "toolResult" ? result.content[0] : undefined;
+        const text = firstContent?.type === "text" ? firstContent.text : undefined;
+        return fauxAssistantMessage(`Search says: ${text ?? "missing result"}`);
+      },
+    ]);
+    const models = createModels();
+    models.setProvider(faux.provider);
+    let searchCount = 0;
+
+    runtime = await createPiDurableAgentRuntime({
+      sqlitePath: join(dir, "search.sqlite"),
+      models,
+      model: { provider: faux.provider.id, modelId: faux.getModel().id },
+      retry: { enabled: false },
+      searxng: {
+        enabled: true,
+        search: (query) => {
+          searchCount += 1;
+          expect(query).toBe("Alfred");
+          return Promise.resolve(expectedSearch);
+        },
+      },
+    });
+    server = await startDaemonServer({ host: "127.0.0.1", port: 0, agentRuntime: runtime });
+
+    const client = await connectWs(server.port);
+    client.sendJson(createHelloMessage());
+    await client.nextMessage();
+    client.sendJson(
+      createSubmitMessage({
+        threadId: DEFAULT_MAIN_THREAD_ID,
+        requestId: "req-search-1",
+        text: "Search for Alfred",
+      }),
+    );
+    await client.nextMessage();
+    const deltas = await collectTurnDeltas(client);
+    const reply = deltas
+      .filter((delta) => delta.event.kind === "text_delta")
+      .map((delta) => (delta.event.kind === "text_delta" ? delta.event.delta : ""))
+      .join("");
+
+    expect(searchCount).toBe(1);
+    expect(reply).toBe(`Search says: ${expectedSearch}`);
+    expect(faux.state.callCount).toBe(2);
+    await client.close();
+  });
+
+  it("keeps ordinary Threads available when the SearXNG Connector is disabled", async () => {
+    const faux = fauxProvider({ tokensPerSecond: 10_000 });
+    faux.setResponses([fauxAssistantMessage("Alfred is ready.")]);
+    const models = createModels();
+    models.setProvider(faux.provider);
+    let searchCount = 0;
+
+    runtime = await createPiDurableAgentRuntime({
+      sqlitePath: join(makeTempDir(), "search-disabled.sqlite"),
+      models,
+      model: { provider: faux.provider.id, modelId: faux.getModel().id },
+      retry: { enabled: false },
+      searxng: {
+        enabled: false,
+        search: () => {
+          searchCount += 1;
+          return Promise.resolve("unexpected");
+        },
+      },
+    });
+    server = await startDaemonServer({ host: "127.0.0.1", port: 0, agentRuntime: runtime });
+
+    const client = await connectWs(server.port);
+    client.sendJson(createHelloMessage());
+    await client.nextMessage();
+    client.sendJson(
+      createSubmitMessage({
+        threadId: DEFAULT_MAIN_THREAD_ID,
+        requestId: "req-search-disabled",
+        text: "Hello Alfred",
+      }),
+    );
+    await client.nextMessage();
+    const deltas = await collectTurnDeltas(client);
+    expect(
+      deltas
+        .filter((delta) => delta.event.kind === "text_delta")
+        .map((delta) => (delta.event.kind === "text_delta" ? delta.event.delta : ""))
+        .join(""),
+    ).toBe("Alfred is ready.");
+    expect(searchCount).toBe(0);
+    expect(faux.state.callCount).toBe(1);
+    await client.close();
+  });
+
+  it.skipIf(process.env.ALFRED_SEARXNG_PODMAN !== "1")(
+    "searches from the existing Thread with the pinned rootless Podman image",
+    async () => {
+      const image = process.env.ALFRED_SEARXNG_IMAGE;
+      if (image === undefined) {
+        throw new Error("ALFRED_SEARXNG_IMAGE must identify the locally built pinned image.");
+      }
+      const faux = fauxProvider({ tokensPerSecond: 10_000 });
+      faux.setResponses([
+        fauxAssistantMessage(
+          fauxToolCall("searxng_web_search", { query: "Alfred" }, { id: "podman-search" }),
+          { stopReason: "toolUse" },
+        ),
+        (context) => {
+          const result = context.messages.find(
+            (message) => message.role === "toolResult" && message.toolCallId === "podman-search",
+          );
+          const content = result?.role === "toolResult" ? result.content[0] : undefined;
+          const text = content?.type === "text" ? content.text : "missing search result";
+          return fauxAssistantMessage(`Search says: ${text}`);
+        },
+      ]);
+      const models = createModels();
+      models.setProvider(faux.provider);
+      runtime = await createPiDurableAgentRuntime({
+        sqlitePath: join(makeTempDir(), "search-podman.sqlite"),
+        models,
+        model: { provider: faux.provider.id, modelId: faux.getModel().id },
+        retry: { enabled: false },
+        searxng: {
+          enabled: true,
+          image,
+          ...(process.env.ALFRED_SEARXNG_CONTAINER !== undefined
+            ? { containerName: process.env.ALFRED_SEARXNG_CONTAINER }
+            : {}),
+          ...(process.env.ALFRED_PODMAN_PATH !== undefined
+            ? { podmanPath: process.env.ALFRED_PODMAN_PATH }
+            : {}),
+          ...(process.env.ALFRED_PODMAN_CONNECTION !== undefined
+            ? { podmanConnection: process.env.ALFRED_PODMAN_CONNECTION }
+            : {}),
+        },
+      });
+      server = await startDaemonServer({ host: "127.0.0.1", port: 0, agentRuntime: runtime });
+      const client = await connectWs(server.port);
+      client.sendJson(createHelloMessage());
+      await client.nextMessage();
+      client.sendJson(
+        createSubmitMessage({
+          threadId: DEFAULT_MAIN_THREAD_ID,
+          requestId: "req-search-podman",
+          text: "Search for Alfred",
+        }),
+      );
+      await client.nextMessage();
+      const deltas = await collectTurnDeltas(client);
+      const reply = deltas
+        .filter((delta) => delta.event.kind === "text_delta")
+        .map((delta) => (delta.event.kind === "text_delta" ? delta.event.delta : ""))
+        .join("");
+      expect(reply).toContain("Alfred synthetic search result");
+      expect(reply).toContain("deterministic result from the synthetic SearXNG endpoint");
+      await client.close();
+    },
+  );
 
   it("deduplicates requestId within one run and across SQLite reopens", async () => {
     const dir = makeTempDir();
