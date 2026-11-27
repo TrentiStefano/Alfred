@@ -2,6 +2,7 @@ name: verify
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
     branches: [main]
 
@@ -37,6 +38,6 @@ jobs:
 
       - run: cd apps/client && flutter pub get
 
-      - run: pnpm verify
+      - run: pnpm --filter @alfred/e2e exec playwright install --with-deps chromium
 
-      - run: cd apps/client && flutter build web
+      - run: pnpm verify --web-e2e

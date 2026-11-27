@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -128,9 +129,23 @@ async function spawnTestDaemon(envOverrides: Record<string, string>): Promise<Sp
       if (child.exitCode !== null || child.signalCode !== null) {
         return;
       }
-      const exiting = waitForExit();
+      const exiting = once(child, "exit", { signal: AbortSignal.timeout(7_000) });
       child.kill("SIGTERM");
-      await exiting;
+      try {
+        await exiting;
+      } catch (error) {
+        const killed = waitForExit();
+        child.kill("SIGKILL");
+        await killed;
+        throw new Error(`Daemon did not exit cleanly after SIGTERM: ${stderrBuffer}`, {
+          cause: error,
+        });
+      }
+      rl.close();
+      if (process.platform !== "win32") {
+        expect(child.exitCode, stderrBuffer).toBe(0);
+        expect(child.signalCode).toBeNull();
+      }
     },
   };
 }
@@ -339,7 +354,12 @@ describe("Daemon SIGKILL + Pi Durable resume() crash recovery", () => {
     expect(lastAgent?.text).toBe("Recovered reply complete.");
 
     await client2.close();
-    await client3.close();
+    try {
+      // Keep a WebSocket and the controlled daemon's stdin reader open during shutdown.
+      await daemon2.stopGracefully();
+    } finally {
+      await client3.close();
+    }
   }, 20_000);
 
   it("settles an interrupted reply cleanly as interrupted when retry is disabled without duplicating turns", async () => {

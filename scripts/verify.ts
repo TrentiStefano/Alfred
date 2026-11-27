@@ -1,10 +1,24 @@
 // The single gatekeeper. Exits 0 only if every check passes. Run: `pnpm verify` or `./scripts/verify`.
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { assertNoPendingReviewFixes } from "./review-fix.ts";
+
+if (process.env.GITHUB_EVENT_NAME === "pull_request" && process.env.GITHUB_EVENT_PATH) {
+  const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")) as {
+    pull_request: { draft: boolean };
+  };
+  if (event.pull_request.draft) {
+    throw new Error("Pull request is a draft. Use gh pr ready to mark it ready for review.");
+  }
+}
+
+assertNoPendingReviewFixes();
 
 interface Step {
   name: string;
   script: string;
   fix: string;
+  filter?: string;
 }
 
 const STEPS: readonly Step[] = [
@@ -41,14 +55,29 @@ const STEPS: readonly Step[] = [
     script: "check:repo",
     fix: "Keep local-only config out of git and AGENTS.md short.",
   },
+  ...(process.argv.includes("--web-e2e")
+    ? [
+        {
+          name: "web:e2e",
+          script: "test:web",
+          filter: "@alfred/e2e",
+          fix: "Fix the Flutter Web and daemon integration. Install Chromium with Playwright if missing.",
+        },
+      ]
+    : []),
 ];
 
 const failed: Step[] = [];
 
 for (const step of STEPS) {
-  process.stdout.write(`\n▶ ${step.name} (pnpm ${step.script})\n`);
+  const command = `pnpm -s ${step.filter === undefined ? "" : `--filter ${step.filter} `}run ${step.script}`;
+  process.stdout.write(`\n▶ ${step.name} (${command})\n`);
   // One command string (not argv) so the shell resolves pnpm.cmd on Windows without DEP0190.
-  const result = spawnSync(`pnpm -s run ${step.script}`, { stdio: "inherit", shell: true });
+  const result = spawnSync(command, {
+    stdio: "inherit",
+    shell: true,
+    env: step.name === "web:e2e" ? { ...process.env, ALFRED_E2E_REBUILD: "1" } : process.env,
+  });
   if (result.status !== 0) failed.push(step);
 }
 
