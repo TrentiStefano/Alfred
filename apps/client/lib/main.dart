@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'daemon_health.dart';
 
 const String _defaultDaemonUrl = String.fromEnvironment(
   'ALFRED_DAEMON_URL',
-  defaultValue: 'http://127.0.0.1:4040',
+  defaultValue: kDefaultDaemonUrl,
 );
 
 void main() {

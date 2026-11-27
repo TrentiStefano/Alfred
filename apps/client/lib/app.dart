@@ -5,17 +5,16 @@ import 'package:http/http.dart' as http;
 
 import 'daemon_health.dart';
 
-class AlfredApp extends StatelessWidget {
-  const AlfredApp({
-    super.key,
-    this.daemonBaseUri,
-    this.httpClient,
-    this.expectedProtocolVersion = kExpectedProtocolVersion,
-  });
+const TextStyle _headingStyle = TextStyle(
+  fontSize: 20,
+  fontWeight: FontWeight.w600,
+);
 
-  final Uri? daemonBaseUri;
+class AlfredApp extends StatelessWidget {
+  const AlfredApp({super.key, required this.daemonBaseUri, this.httpClient});
+
+  final Uri daemonBaseUri;
   final http.Client? httpClient;
-  final int expectedProtocolVersion;
 
   @override
   Widget build(BuildContext context) {
@@ -25,9 +24,8 @@ class AlfredApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
       ),
       home: HealthCheckScreen(
-        daemonBaseUri: daemonBaseUri ?? Uri.parse('http://127.0.0.1:4040'),
+        daemonBaseUri: daemonBaseUri,
         httpClient: httpClient,
-        expectedProtocolVersion: expectedProtocolVersion,
       ),
     );
   }
@@ -37,13 +35,11 @@ class HealthCheckScreen extends StatefulWidget {
   const HealthCheckScreen({
     super.key,
     required this.daemonBaseUri,
-    required this.expectedProtocolVersion,
     this.httpClient,
   });
 
   final Uri daemonBaseUri;
   final http.Client? httpClient;
-  final int expectedProtocolVersion;
 
   @override
   State<HealthCheckScreen> createState() => _HealthCheckScreenState();
@@ -126,14 +122,14 @@ class _HealthCheckScreenState extends State<HealthCheckScreen> {
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
-            child: _buildBody(context),
+            child: _buildBody(),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildBody(BuildContext context) {
+  Widget _buildBody() {
     return switch (_state) {
       _LoadingState() => const Column(
         mainAxisSize: MainAxisSize.min,
@@ -143,14 +139,11 @@ class _HealthCheckScreenState extends State<HealthCheckScreen> {
           Text('Checking daemon health...'),
         ],
       ),
-      _LoadedState(:final DaemonHealth health) => _buildLoaded(context, health),
+      _LoadedState(:final DaemonHealth health) => _buildLoaded(health),
       _ErrorState(:final String message) => Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          const Text(
-            'Daemon unreachable',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-          ),
+          const Text('Daemon unreachable', style: _headingStyle),
           const SizedBox(height: 8),
           Text(message, textAlign: TextAlign.center),
           const SizedBox(height: 16),
@@ -160,24 +153,21 @@ class _HealthCheckScreenState extends State<HealthCheckScreen> {
     };
   }
 
-  Widget _buildLoaded(BuildContext context, DaemonHealth health) {
-    final bool compatible = health.isProtocolCompatible(
-      expected: widget.expectedProtocolVersion,
-    );
-    final String heading = compatible
+  Widget _buildLoaded(DaemonHealth health) {
+    final bool compatible = health.isProtocolCompatible();
+    final String heading = !compatible
+        ? 'Incompatible protocol'
+        : health.ok
         ? 'Daemon connected'
-        : 'Incompatible protocol';
+        : 'Daemon unhealthy';
     final String versionLabel = compatible
         ? 'Protocol v${health.protocolVersion} (compatible)'
-        : 'Protocol v${health.protocolVersion} (expected v${widget.expectedProtocolVersion})';
+        : 'Protocol v${health.protocolVersion} (expected v$kExpectedProtocolVersion)';
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        Text(
-          heading,
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-        ),
+        Text(heading, style: _headingStyle),
         const SizedBox(height: 8),
         Text(health.service),
         const SizedBox(height: 4),

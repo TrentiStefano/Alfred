@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { PROTOCOL_VERSION } from "@alfred/protocol";
+import { createHealthResponse } from "@alfred/protocol";
 
 export interface DaemonServerOptions {
   host?: string;
@@ -12,11 +12,15 @@ export interface DaemonServer {
   close(): Promise<void>;
 }
 
+const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, OPTIONS",
+} as const;
+
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, {
+    ...CORS_HEADERS,
     "content-type": "application/json; charset=utf-8",
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, OPTIONS",
   });
   res.end(JSON.stringify(payload));
 }
@@ -26,20 +30,13 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const path = (req.url ?? "/").split("?")[0] ?? "/";
 
   if (method === "OPTIONS") {
-    res.writeHead(204, {
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET, OPTIONS",
-    });
+    res.writeHead(204, CORS_HEADERS);
     res.end();
     return;
   }
 
   if (method === "GET" && path === "/health") {
-    sendJson(res, 200, {
-      ok: true,
-      service: "alfred-daemon",
-      protocolVersion: PROTOCOL_VERSION,
-    });
+    sendJson(res, 200, createHealthResponse());
     return;
   }
 

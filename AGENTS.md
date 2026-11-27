@@ -1,6 +1,6 @@
 # Alfred
 
-Self-hosted, privacy-first personal assistant: an always-on daemon (Pi + Pi Durable) and an iPhone PWA.
+Self-hosted, privacy-first personal assistant: an always-on daemon (Pi + Pi Durable), a Desktop app, and an iPhone Web PWA.
 Domain language lives in `GLOSSARY.md`; use its terms (Owner, Agent, Environment, Connector, Tool, Risk level, Approval…).
 
 ## Done means verified

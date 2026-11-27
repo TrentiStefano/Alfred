@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 const int kExpectedProtocolVersion = 1;
+const String kDefaultDaemonUrl = 'http://127.0.0.1:4040';
 
 class DaemonHealth {
   const DaemonHealth({
@@ -15,9 +16,7 @@ class DaemonHealth {
   final String service;
   final int protocolVersion;
 
-  bool isProtocolCompatible({int expected = kExpectedProtocolVersion}) {
-    return ok && protocolVersion == expected;
-  }
+  bool isProtocolCompatible() => protocolVersion == kExpectedProtocolVersion;
 
   static DaemonHealth fromJsonObject(Object? decoded) {
     if (decoded is! Map<Object?, Object?>) {
