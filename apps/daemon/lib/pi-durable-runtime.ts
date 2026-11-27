@@ -38,6 +38,7 @@ import {
   projectRunFailure,
 } from "./pi-projection.ts";
 import { sanitizeErrorMessage } from "./sanitize-error.ts";
+import { createSearxngConnector, type SearxngRuntimeConfig } from "./searxng.ts";
 
 const ENTRY_SCAN_PAGE_SIZE = 256;
 const WATCH_WINDOW_MIN = 200;
@@ -71,6 +72,7 @@ export interface PiDurableAgentRuntimeOptions {
   retry?: AgentRetryOptions;
   progress?: AgentProgressOptions;
   sqlitePrefix?: string;
+  searxng?: SearxngRuntimeConfig;
 }
 
 function resolveModelRef(spec: string | undefined, models: Models): ModelRef | undefined {
@@ -278,11 +280,20 @@ export async function createPiDurableAgentRuntime(
   );
 
   const settings = buildHarnessSettings(options.retry, options.progress);
+  const searxng =
+    options.searxng?.enabled === true ? createSearxngConnector(options.searxng) : undefined;
+  const registry = createRegistry();
+  if (searxng !== undefined) {
+    registry.install(searxng.extension);
+  }
   const harness = await Harness.open(
     storage,
     {
       models: () => currentModels,
-      registry: createRegistry(),
+      registry,
+      ...(searxng !== undefined && options.searxng?.search === undefined
+        ? { env: () => searxng.environment() }
+        : {}),
       ...(settings !== undefined ? { settings } : {}),
     },
     BACKGROUND_CONTEXT,
@@ -645,6 +656,7 @@ export async function createPiDurableAgentRuntime(
         await watch.stop();
         listeners.clear();
         await harness.close(BACKGROUND_CONTEXT);
+        await searxng?.close();
       })();
       return closePromise;
     },

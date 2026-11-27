@@ -65,6 +65,15 @@ importers:
       '@earendil-works/pi-durable':
         specifier: 1.6.1
         version: 1.6.1(@smithy/signature-v4@5.7.5)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
+      '@earendil-works/pi-env':
+        specifier: 1.6.1
+        version: 1.6.1(@smithy/signature-v4@5.7.5)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
+      '@earendil-works/pi-mcp':
+        specifier: 1.6.1
+        version: 1.6.1
+      '@earendil-works/pi-schema':
+        specifier: 1.6.1
+        version: 1.6.1
       ws:
         specifier: 8.23.0
         version: 8.23.0
@@ -248,6 +257,10 @@ packages:
 
   '@earendil-works/pi-durable@1.6.1':
     resolution: {integrity: sha512-hhKQg7FDsp25+pvIodqYZEEYTqKA/lBvHYJqHwwqb/zIc0hHq45HK6hQ7BnMHIyjsI7ev9P8qLCQlwxiFblm8A==}
+    engines: {node: '>=22.19.0'}
+
+  '@earendil-works/pi-env@1.6.1':
+    resolution: {integrity: sha512-FUnNhlE8qE8PNu2OMpL6ncVS3ZFeD0CQmosiDb5HKwiX9l8Z8PdWnh4HnP2ROwjNQHpftPyD1Zj5WxoaGt09eg==}
     engines: {node: '>=22.19.0'}
 
   '@earendil-works/pi-mcp@1.6.1':
@@ -1884,6 +1897,25 @@ snapshots:
       '@earendil-works/pi-telemetry': 1.6.1
       '@silvia-odwyer/photon': 0.3.3
       diff: 8.0.4
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
+      - bufferutil
+      - esbuild
+      - google-auth-library
+      - kerberos
+      - react
+      - supports-color
+      - undici
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@earendil-works/pi-env@1.6.1(@smithy/signature-v4@5.7.5)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)':
+    dependencies:
+      '@earendil-works/chord': 1.6.1(ws@8.23.0)
+      '@earendil-works/pi-durable': 1.6.1(@smithy/signature-v4@5.7.5)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - '@smithy/hash-node'

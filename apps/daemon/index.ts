@@ -18,6 +18,11 @@ export {
 } from "./lib/pi-durable-runtime.ts";
 export { describeDaemon } from "./lib/describe.ts";
 export {
+  createSearxngConnector,
+  type SearxngConnector,
+  type SearxngRuntimeConfig,
+} from "./lib/searxng.ts";
+export {
   installSignalShutdown,
   type ShutdownHost,
   type SignalShutdownOptions,

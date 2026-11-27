@@ -1,0 +1,9 @@
+FROM docker.io/library/node:22.23.5-bookworm-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb
+WORKDIR /opt/alfred
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts \
+    && case "$(node -p 'process.arch')" in x64|arm64) ;; *) exit 1 ;; esac \
+    && install -m 0755 "node_modules/@earendil-works/pi-env/bin/pi-env-linux-$(node -p 'process.arch')/pi-env" /usr/local/bin/pi-env
+COPY synthetic-searxng.mjs ./
+USER 1000:1000
+CMD ["node", "synthetic-searxng.mjs"]
