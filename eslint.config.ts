@@ -8,7 +8,14 @@ const TEST_FILES = ["**/tests/**/*.ts", "**/*.test.ts"];
 
 export default defineConfig(
   {
-    ignores: ["**/node_modules/**", "**/dist/**", "**/coverage/**", ".claude/**", ".agents/**"],
+    ignores: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/coverage/**",
+      "apps/client/**",
+      ".claude/**",
+      ".agents/**",
+    ],
   },
   {
     linterOptions: {

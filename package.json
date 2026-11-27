@@ -14,6 +14,10 @@
     "lint": "eslint --max-warnings 0 .",
     "lint:boundaries": "node scripts/lint-boundaries.ts",
     "test": "vitest run",
+    "flutter:format": "dart format apps/client/lib apps/client/test",
+    "flutter:format:check": "dart format --output=none --set-exit-if-changed apps/client/lib apps/client/test",
+    "flutter:analyze": "cd apps/client && flutter analyze --fatal-infos",
+    "flutter:test": "cd apps/client && flutter test",
     "check:repo": "node scripts/check-repo.ts",
     "skills:sync": "node scripts/sync-agent-skills.ts"
   },

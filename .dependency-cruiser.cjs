@@ -114,14 +114,8 @@ module.exports = {
       "Connectors (packages/connector-*) may import only @alfred/plugin-sdk and @alfred/protocol, never apps/daemon or another Connector. Ask the daemon for what you need through the ConnectorPlugin contract.",
     ),
     layer(
-      "pwa-only-uses-protocol",
-      "^apps/pwa/",
-      ["^packages/protocol/"],
-      "apps/pwa may import only @alfred/protocol. Talk to the daemon over the WebSocket protocol, never by importing daemon or Connector code.",
-    ),
-    layer(
       "nothing-imports-the-daemon",
-      "^(?:packages|tools)/|^apps/pwa/",
+      "^(?:packages|tools)/",
       ["^packages/", "^tools/"],
       "Nothing may import apps/daemon: it is the top layer. Move the shared piece into packages/protocol or packages/plugin-sdk.",
     ),
