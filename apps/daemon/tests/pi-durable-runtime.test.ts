@@ -1,6 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFile, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -31,6 +33,8 @@ import {
   type AgentRuntime,
   type DaemonServer,
 } from "../index.ts";
+
+const execFileAsync = promisify(execFile);
 
 interface WsTestClient {
   nextMessage(): Promise<DaemonMessage>;
@@ -312,6 +316,102 @@ describe("Pi Durable AgentRuntime over WebSocket", () => {
     await client.close();
   });
 
+  it("reports an interrupted search and accepts a later search in the same Thread", async () => {
+    const dir = makeTempDir();
+    const faux = fauxProvider({ tokensPerSecond: 10_000 });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("searxng_web_search", { query: "first attempt" }, { id: "failed-search" }),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        const result = context.messages.find(
+          (message) => message.role === "toolResult" && message.toolCallId === "failed-search",
+        );
+        const content = result?.role === "toolResult" ? result.content[0] : undefined;
+        return fauxAssistantMessage(
+          content?.type === "text" && content.text.includes("unavailable")
+            ? "The search Environment is unavailable. I can still help with other questions."
+            : "The search did not report its failure.",
+        );
+      },
+      fauxAssistantMessage("Ordinary conversation is still available."),
+      fauxAssistantMessage(
+        fauxToolCall("searxng_web_search", { query: "second attempt" }, { id: "recovered-search" }),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        const result = context.messages.find(
+          (message) => message.role === "toolResult" && message.toolCallId === "recovered-search",
+        );
+        const content = result?.role === "toolResult" ? result.content[0] : undefined;
+        return fauxAssistantMessage(
+          content?.type === "text" ? `Recovered search: ${content.text}` : "Missing search result.",
+        );
+      },
+    ]);
+    const models = createModels();
+    models.setProvider(faux.provider);
+    let searchCalls = 0;
+
+    runtime = await createPiDurableAgentRuntime({
+      sqlitePath: join(dir, "search-recovery.sqlite"),
+      models,
+      model: { provider: faux.provider.id, modelId: faux.getModel().id },
+      retry: { enabled: false },
+      searxng: {
+        enabled: true,
+        search: (query) => {
+          searchCalls += 1;
+          if (query === "first attempt") {
+            return Promise.reject(new Error("SearXNG Environment unavailable."));
+          }
+          return Promise.resolve("synthetic recovered result");
+        },
+      },
+    });
+    server = await startDaemonServer({ host: "127.0.0.1", port: 0, agentRuntime: runtime });
+
+    const client = await connectWs(server.port);
+    client.sendJson(createHelloMessage());
+    await client.nextMessage();
+    const submit = (requestId: string, text: string) => {
+      client.sendJson(createSubmitMessage({ threadId: DEFAULT_MAIN_THREAD_ID, requestId, text }));
+    };
+    submit("req-search-interrupted", "Search once");
+    await client.nextMessage();
+    const failedDeltas = await collectTurnDeltas(client);
+    const failedReply = failedDeltas
+      .filter((delta) => delta.event.kind === "text_delta")
+      .map((delta) => (delta.event.kind === "text_delta" ? delta.event.delta : ""))
+      .join("");
+    expect(failedReply).toContain("Environment is unavailable");
+    expect(searchCalls).toBe(1);
+
+    submit("req-chat-during-outage", "Can you help without search?");
+    await client.nextMessage();
+    const chatDeltas = await collectTurnDeltas(client);
+    expect(
+      chatDeltas
+        .filter((delta) => delta.event.kind === "text_delta")
+        .map((delta) => (delta.event.kind === "text_delta" ? delta.event.delta : ""))
+        .join(""),
+    ).toBe("Ordinary conversation is still available.");
+    expect(searchCalls).toBe(1);
+
+    submit("req-search-recovered", "Search again");
+    await client.nextMessage();
+    const recoveredDeltas = await collectTurnDeltas(client);
+    const recoveredReply = recoveredDeltas
+      .filter((delta) => delta.event.kind === "text_delta")
+      .map((delta) => (delta.event.kind === "text_delta" ? delta.event.delta : ""))
+      .join("");
+    expect(recoveredReply).toContain("synthetic recovered result");
+    expect(searchCalls).toBe(2);
+    expect(faux.state.callCount).toBe(5);
+    await client.close();
+  });
+
   it("keeps ordinary Threads available when the SearXNG Connector is disabled", async () => {
     const faux = fauxProvider({ tokensPerSecond: 10_000 });
     faux.setResponses([fauxAssistantMessage("Alfred is ready.")]);
@@ -421,6 +521,163 @@ describe("Pi Durable AgentRuntime over WebSocket", () => {
       expect(reply).toContain("deterministic result from the synthetic SearXNG endpoint");
       await client.close();
     },
+  );
+
+  it.skipIf(process.env.ALFRED_SEARXNG_PODMAN !== "1")(
+    "fails an interrupted Podman search and reconnects on the next Thread search",
+    async () => {
+      const image = process.env.ALFRED_SEARXNG_IMAGE;
+      if (image === undefined) {
+        throw new Error("ALFRED_SEARXNG_IMAGE must identify the locally built pinned image.");
+      }
+      const podman = process.env.ALFRED_PODMAN_PATH ?? "podman";
+      const podmanArgs =
+        process.env.ALFRED_PODMAN_CONNECTION !== undefined
+          ? ["--connection", process.env.ALFRED_PODMAN_CONNECTION]
+          : [];
+      const containerName = `alfred-searxng-recovery-${String(process.pid)}-${String(Date.now())}`;
+      const faux = fauxProvider({ tokensPerSecond: 10_000 });
+      faux.setResponses([
+        fauxAssistantMessage(
+          fauxToolCall(
+            "searxng_web_search",
+            { query: "alfred-hold-search" },
+            { id: "held-search" },
+          ),
+          { stopReason: "toolUse" },
+        ),
+        () => fauxAssistantMessage("The SearXNG Environment became unavailable during the search."),
+        fauxAssistantMessage("Ordinary conversation is still available during the outage."),
+        fauxAssistantMessage(
+          fauxToolCall("searxng_web_search", { query: "Alfred" }, { id: "recovered-search" }),
+          { stopReason: "toolUse" },
+        ),
+        (context) => {
+          const result = context.messages.find(
+            (message) => message.role === "toolResult" && message.toolCallId === "recovered-search",
+          );
+          const content = result?.role === "toolResult" ? result.content[0] : undefined;
+          return fauxAssistantMessage(
+            content?.type === "text" ? `Recovered: ${content.text}` : "Missing recovered result.",
+          );
+        },
+      ]);
+      const models = createModels();
+      models.setProvider(faux.provider);
+      runtime = await createPiDurableAgentRuntime({
+        sqlitePath: join(makeTempDir(), "search-podman-recovery.sqlite"),
+        models,
+        model: { provider: faux.provider.id, modelId: faux.getModel().id },
+        retry: { enabled: false },
+        searxng: {
+          enabled: true,
+          image,
+          containerName,
+          podmanPath: podman,
+          ...(process.env.ALFRED_PODMAN_CONNECTION !== undefined
+            ? { podmanConnection: process.env.ALFRED_PODMAN_CONNECTION }
+            : {}),
+        },
+      });
+      server = await startDaemonServer({ host: "127.0.0.1", port: 0, agentRuntime: runtime });
+      const client = await connectWs(server.port);
+      client.sendJson(createHelloMessage());
+      await client.nextMessage();
+      await execFileAsync(podman, [
+        ...podmanArgs,
+        "run",
+        "--pull=never",
+        "--name",
+        containerName,
+        "--label",
+        "io.alfred.connector=searxng",
+        "--network=none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev",
+        "-d",
+        image,
+      ]);
+      client.sendJson(
+        createSubmitMessage({
+          threadId: DEFAULT_MAIN_THREAD_ID,
+          requestId: "req-search-podman-interrupted",
+          text: "Search and wait for interruption",
+        }),
+      );
+      await client.nextMessage();
+
+      const logReader = spawn(podman, [...podmanArgs, "logs", "--follow", containerName], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      await new Promise<void>((resolve, reject) => {
+        let output = "";
+        let errorOutput = "";
+        logReader.stdout.on("data", (chunk: Buffer) => {
+          output += chunk.toString("utf8");
+          if (output.includes("synthetic search waiting")) {
+            resolve();
+          }
+        });
+        logReader.stderr.on("data", (chunk: Buffer) => {
+          errorOutput += chunk.toString("utf8");
+        });
+        logReader.once("error", reject);
+        logReader.once("exit", (code) => {
+          reject(
+            new Error(
+              `Podman log stream exited before the hold marker (code ${String(code)}): ${errorOutput}`,
+            ),
+          );
+        });
+      });
+      logReader.kill();
+      await execFileAsync(podman, [...podmanArgs, "stop", "-t", "1", containerName]);
+
+      const interruptedDeltas = await collectTurnDeltas(client);
+      const interruptedReply = interruptedDeltas
+        .filter((delta) => delta.event.kind === "text_delta")
+        .map((delta) => (delta.event.kind === "text_delta" ? delta.event.delta : ""))
+        .join("");
+      expect(interruptedReply).toContain("Environment became unavailable");
+      expect(faux.state.callCount).toBe(2);
+
+      client.sendJson(
+        createSubmitMessage({
+          threadId: DEFAULT_MAIN_THREAD_ID,
+          requestId: "req-chat-podman-outage",
+          text: "Can you help without search?",
+        }),
+      );
+      await client.nextMessage();
+      const chatDeltas = await collectTurnDeltas(client);
+      const chatReply = chatDeltas
+        .filter((delta) => delta.event.kind === "text_delta")
+        .map((delta) => (delta.event.kind === "text_delta" ? delta.event.delta : ""))
+        .join("");
+      expect(chatReply).toContain("Ordinary conversation is still available");
+      expect(faux.state.callCount).toBe(3);
+
+      client.sendJson(
+        createSubmitMessage({
+          threadId: DEFAULT_MAIN_THREAD_ID,
+          requestId: "req-search-podman-recovered",
+          text: "Search again after the Environment restarted",
+        }),
+      );
+      await client.nextMessage();
+      const recoveredDeltas = await collectTurnDeltas(client);
+      const recoveredReply = recoveredDeltas
+        .filter((delta) => delta.event.kind === "text_delta")
+        .map((delta) => (delta.event.kind === "text_delta" ? delta.event.delta : ""))
+        .join("");
+      expect(recoveredReply).toContain("Alfred synthetic search result");
+      expect(faux.state.callCount).toBe(5);
+      await client.close();
+    },
+    45_000,
   );
 
   it("deduplicates requestId within one run and across SQLite reopens", async () => {

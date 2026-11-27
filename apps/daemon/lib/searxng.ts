@@ -6,6 +6,7 @@ import { defineExtension, type ToolRegistration } from "@earendil-works/pi-durab
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { obj, str, type Schema } from "@earendil-works/pi-schema";
 import type { RiskLevel } from "@alfred/plugin-sdk";
+import { sanitizeErrorMessage } from "./sanitize-error.ts";
 
 const execFileAsync = promisify(execFile);
 const SEARCH_TOOL_NAME = "searxng_web_search";
@@ -14,6 +15,8 @@ const NODE_COMMAND = "/usr/local/bin/node";
 const MCP_COMMAND = "/opt/alfred/node_modules/mcp-searxng/dist/cli.js";
 const PI_ENV_COMMAND = "/usr/local/bin/pi-env";
 const SYNTHETIC_ENDPOINT = "http://127.0.0.1:8080";
+const CONTAINER_LABEL = "io.alfred.connector";
+const CONTAINER_LABEL_VALUE = "searxng";
 
 export const SEARXNG_SEARCH_CONTRACT = {
   tool: SEARCH_TOOL_NAME,
@@ -50,19 +53,50 @@ export function createSearxngConnector(config: SearxngRuntimeConfig): SearxngCon
   let startPromise: Promise<void> | undefined;
 
   async function ensureContainer(): Promise<void> {
-    if (containerStarted) {
-      return;
-    }
     startPromise ??= (async () => {
       const image = validateImage(config.image);
       const podman = config.podmanPath ?? "podman";
       const containerName = config.containerName ?? "alfred-searxng";
+      const prefix =
+        config.podmanConnection !== undefined ? ["--connection", config.podmanConnection] : [];
+      const rootless = await execFileAsync(
+        podman,
+        [...prefix, "info", "--format", "{{.Host.Security.Rootless}}"],
+        { timeout: 15_000 },
+      );
+      if (rootless.stdout.trim() !== "true") {
+        throw new Error("Podman is not using a rootless engine.");
+      }
+      const inspected = await execFileAsync(
+        podman,
+        [
+          ...prefix,
+          "inspect",
+          "--format",
+          `{{.State.Running}}|{{index .Config.Labels "${CONTAINER_LABEL}"}}`,
+          containerName,
+        ],
+        { timeout: 15_000 },
+      ).catch(() => undefined);
+      if (inspected !== undefined) {
+        const [running, ownerLabel] = inspected.stdout.trim().split("|");
+        if (ownerLabel !== CONTAINER_LABEL_VALUE) {
+          throw new Error("The configured SearXNG container name is already in use.");
+        }
+        if (running !== "true") {
+          await execFileAsync(podman, [...prefix, "start", containerName], { timeout: 30_000 });
+        }
+        containerStarted = true;
+        return;
+      }
       const args = [
-        ...(config.podmanConnection !== undefined ? ["--connection", config.podmanConnection] : []),
+        ...prefix,
         "run",
         "--pull=never",
         "--name",
         containerName,
+        "--label",
+        `${CONTAINER_LABEL}=${CONTAINER_LABEL_VALUE}`,
         "--network=none",
         "--read-only",
         "--cap-drop=ALL",
@@ -73,29 +107,33 @@ export function createSearxngConnector(config: SearxngRuntimeConfig): SearxngCon
         image,
       ];
       try {
-        const rootless = await execFileAsync(
-          podman,
-          [
-            ...(config.podmanConnection !== undefined
-              ? ["--connection", config.podmanConnection]
-              : []),
-            "info",
-            "--format",
-            "{{.Host.Security.Rootless}}",
-          ],
-          { timeout: 15_000 },
-        );
-        if (rootless.stdout.trim() !== "true") {
-          throw new Error("Podman is not using a rootless engine.");
-        }
         await execFileAsync(podman, args, { timeout: 30_000 });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Could not start the SearXNG Environment: ${message}`, { cause: error });
+        throw new Error("Could not start the SearXNG Environment.", { cause: error });
       }
       containerStarted = true;
     })();
-    await startPromise;
+    try {
+      await startPromise;
+    } catch (error) {
+      containerStarted = false;
+      throw error;
+    } finally {
+      startPromise = undefined;
+    }
+  }
+
+  async function discardClient(): Promise<void> {
+    const staleClient = client;
+    const staleConnection = connection;
+    client = undefined;
+    connection = undefined;
+    environment = undefined;
+    try {
+      await staleClient?.close();
+    } finally {
+      staleConnection?.close();
+    }
   }
 
   async function ensureClient(): Promise<McpClient> {
@@ -150,22 +188,36 @@ export function createSearxngConnector(config: SearxngRuntimeConfig): SearxngCon
     if (config.search !== undefined) {
       return config.search(query);
     }
-    const activeClient = await ensureClient();
-    const result = await activeClient.callTool(MCP_TOOL_NAME, { query });
-    if (result.isError === true) {
-      throw new Error(
-        result.content.map((item) => (item.type === "text" ? item.text : "")).join("\n") ||
-          "SearXNG search failed.",
-      );
+    let serviceError = false;
+    let emptyResult = false;
+    try {
+      const activeClient = await ensureClient();
+      const result = await activeClient.callTool(MCP_TOOL_NAME, { query });
+      if (result.isError === true) {
+        serviceError = true;
+        const message = result.content
+          .map((item) => (item.type === "text" ? item.text : ""))
+          .join("\n");
+        throw new Error(sanitizeErrorMessage(message, "SearXNG search failed in its Environment."));
+      }
+      const text = result.content
+        .filter((item): item is Extract<typeof item, { type: "text" }> => item.type === "text")
+        .map((item) => item.text)
+        .join("\n");
+      if (text.length === 0) {
+        emptyResult = true;
+        throw new Error("SearXNG search returned no readable result.");
+      }
+      return text;
+    } catch (error) {
+      await discardClient();
+      if (serviceError || emptyResult) {
+        throw error;
+      }
+      throw new Error("SearXNG Environment or private MCP connection is unavailable.", {
+        cause: error,
+      });
     }
-    const text = result.content
-      .filter((item): item is Extract<typeof item, { type: "text" }> => item.type === "text")
-      .map((item) => item.text)
-      .join("\n");
-    if (text.length === 0) {
-      throw new Error("SearXNG search returned no readable result.");
-    }
-    return text;
   }
 
   const tool = {
