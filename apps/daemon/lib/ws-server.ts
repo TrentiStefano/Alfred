@@ -2,22 +2,25 @@ import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
+  DEFAULT_MAIN_THREAD_ID,
   PROTOCOL_VERSION,
   createAckMessage,
+  createDeltaMessage,
   createErrorMessage,
   createSnapshotMessage,
   isSupportedProtocolVersion,
   parseClientMessage,
   type ClientMessage,
   type DaemonMessage,
-  type ThreadSnapshot,
 } from "@alfred/protocol";
-import { AgentRuntimeError, type AgentRuntime } from "./agent-runtime.ts";
+import { AgentRuntimeError, type AgentRuntime, type ThreadDeltaEvent } from "./agent-runtime.ts";
 
 interface ConnectionState {
   socket: WebSocket;
   handshaked: boolean;
-  nextSeq: number;
+  submittingCount: number;
+  pendingSubmitDeltas: ThreadDeltaEvent[];
+  unsubscribe: (() => void) | undefined;
   queue: Promise<void>;
 }
 
@@ -53,14 +56,24 @@ export function attachWebSocketServer(
   const wss = new WebSocketServer({ noServer: true });
   const connections = new Set<ConnectionState>();
 
-  function broadcastSnapshot(snapshot: ThreadSnapshot): void {
-    for (const conn of connections) {
-      if (!conn.handshaked || conn.socket.readyState !== WebSocket.OPEN) {
-        continue;
-      }
-      const seq = conn.nextSeq;
-      conn.nextSeq += 1;
-      sendMessage(conn.socket, createSnapshotMessage({ seq, thread: snapshot }));
+  function sendDelta(conn: ConnectionState, delta: ThreadDeltaEvent): void {
+    sendMessage(
+      conn.socket,
+      createDeltaMessage({
+        threadId: delta.threadId,
+        seq: delta.seq,
+        event: delta.event,
+      }),
+    );
+  }
+
+  function flushPendingSubmitDeltas(conn: ConnectionState): void {
+    if (conn.submittingCount > 0 || conn.pendingSubmitDeltas.length === 0) {
+      return;
+    }
+    const pending = conn.pendingSubmitDeltas.splice(0);
+    for (const delta of pending) {
+      sendDelta(conn, delta);
     }
   }
 
@@ -107,9 +120,44 @@ export function attachWebSocketServer(
       }
 
       conn.handshaked = true;
-      conn.nextSeq = 1;
-      const snapshot = await runtime.getSnapshot();
-      sendMessage(conn.socket, createSnapshotMessage({ seq: 0, thread: snapshot }));
+      const bufferedDuringSubscribe: ThreadDeltaEvent[] = [];
+      let subscribed = false;
+      let snapshotSeq = 0;
+      const subscription = await runtime.subscribeThread(DEFAULT_MAIN_THREAD_ID, (delta) => {
+        if (!subscribed) {
+          bufferedDuringSubscribe.push(delta);
+          return;
+        }
+        if (delta.seq <= snapshotSeq) {
+          return;
+        }
+        if (conn.submittingCount > 0) {
+          conn.pendingSubmitDeltas.push(delta);
+          return;
+        }
+        sendDelta(conn, delta);
+      });
+
+      if (conn.socket.readyState !== WebSocket.OPEN) {
+        subscription.unsubscribe();
+        return;
+      }
+
+      conn.unsubscribe = () => {
+        subscription.unsubscribe();
+      };
+      snapshotSeq = subscription.seq;
+      subscribed = true;
+      sendMessage(
+        conn.socket,
+        createSnapshotMessage({ seq: subscription.seq, thread: subscription.snapshot }),
+      );
+      for (const delta of bufferedDuringSubscribe) {
+        if (delta.seq > snapshotSeq) {
+          sendDelta(conn, delta);
+        }
+      }
+      bufferedDuringSubscribe.length = 0;
       return;
     }
 
@@ -124,6 +172,7 @@ export function attachWebSocketServer(
       return;
     }
 
+    conn.submittingCount += 1;
     try {
       const result = await runtime.submit({
         threadId: message.threadId,
@@ -139,9 +188,6 @@ export function attachWebSocketServer(
           deduplicated: result.deduplicated,
         }),
       );
-      if (!result.deduplicated) {
-        broadcastSnapshot(result.snapshot);
-      }
     } catch (error) {
       if (error instanceof AgentRuntimeError) {
         sendMessage(
@@ -164,6 +210,9 @@ export function attachWebSocketServer(
           requestId: message.requestId,
         }),
       );
+    } finally {
+      conn.submittingCount -= 1;
+      flushPendingSubmitDeltas(conn);
     }
   }
 
@@ -171,7 +220,9 @@ export function attachWebSocketServer(
     const conn: ConnectionState = {
       socket,
       handshaked: false,
-      nextSeq: 0,
+      submittingCount: 0,
+      pendingSubmitDeltas: [],
+      unsubscribe: undefined,
       queue: Promise.resolve(),
     };
     connections.add(conn);
@@ -182,6 +233,8 @@ export function attachWebSocketServer(
     });
 
     socket.on("close", () => {
+      conn.unsubscribe?.();
+      conn.unsubscribe = undefined;
       connections.delete(conn);
     });
   });

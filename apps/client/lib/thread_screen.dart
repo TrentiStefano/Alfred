@@ -15,12 +15,16 @@ class ThreadScreen extends StatefulWidget {
     this.httpClient,
     this.webSocketChannelFactory,
     this.requestIdGenerator,
+    this.reconnectDelay,
+    this.maxReconnectAttempts = 5,
   });
 
   final Uri daemonBaseUri;
   final http.Client? httpClient;
   final WebSocketChannelFactory? webSocketChannelFactory;
   final String Function()? requestIdGenerator;
+  final ReconnectDelayBuilder? reconnectDelay;
+  final int maxReconnectAttempts;
 
   @override
   State<ThreadScreen> createState() => _ThreadScreenState();
@@ -38,6 +42,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
       daemonBaseUri: widget.daemonBaseUri,
       channelFactory: widget.webSocketChannelFactory,
       requestIdGenerator: widget.requestIdGenerator,
+      reconnectDelay: widget.reconnectDelay,
+      maxReconnectAttempts: widget.maxReconnectAttempts,
     );
     _composerController.addListener(_onDraftChanged);
     _client.connect();
@@ -62,8 +68,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   void _handleSubmit() {
     final String text = _composerController.text;
-    if (text.trim().isEmpty ||
-        _client.status != ThreadConnectionStatus.connected) {
+    if (text.trim().isEmpty || !_client.canSubmit) {
       return;
     }
     _client.submitPrompt(text);
@@ -92,7 +97,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         final ThreadConnectionStatus status = _client.status;
         final String agentName = thread?.agentName ?? kDefaultMainAgentName;
         final bool canReconnect =
-            status == ThreadConnectionStatus.disconnected ||
+            status == ThreadConnectionStatus.offline ||
             status == ThreadConnectionStatus.error;
 
         return Scaffold(
@@ -139,8 +144,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
         ThreadConnectionStatus.connecting => 'Connecting to Alfred...',
         ThreadConnectionStatus.connected =>
           'Send a message to start a Thread with ${thread?.agentName ?? kDefaultMainAgentName}.',
+        ThreadConnectionStatus.streaming => 'Alfred is responding...',
+        ThreadConnectionStatus.reconnecting => 'Reconnecting to daemon...',
+        ThreadConnectionStatus.offline => 'Offline — unable to reach daemon.',
         ThreadConnectionStatus.error => 'Unable to load Thread.',
-        ThreadConnectionStatus.disconnected => 'Disconnected from daemon.',
       };
       return Center(
         child: Padding(
@@ -163,7 +170,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   }
 
   Widget _buildComposer(String agentName, ThreadConnectionStatus status) {
-    final bool connected = status == ThreadConnectionStatus.connected;
+    final bool canSubmit = _client.canSubmit;
     return SafeArea(
       top: false,
       child: Padding(
@@ -173,7 +180,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
             Expanded(
               child: TextField(
                 controller: _composerController,
-                enabled: connected,
+                enabled: canSubmit,
                 textInputAction: TextInputAction.send,
                 onSubmitted: (String _) => _handleSubmit(),
                 decoration: InputDecoration(
@@ -184,7 +191,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
             ),
             const SizedBox(width: 12),
             FilledButton(
-              onPressed: connected && _hasDraft ? _handleSubmit : null,
+              onPressed: canSubmit && _hasDraft ? _handleSubmit : null,
               child: const Text('Send'),
             ),
           ],
@@ -205,14 +212,18 @@ class _StatusChip extends StatelessWidget {
     final Color background = switch (status) {
       ThreadConnectionStatus.connected => colors.primaryContainer,
       ThreadConnectionStatus.connecting => colors.secondaryContainer,
+      ThreadConnectionStatus.streaming => colors.tertiaryContainer,
+      ThreadConnectionStatus.reconnecting => colors.secondaryContainer,
+      ThreadConnectionStatus.offline => colors.surfaceContainerHighest,
       ThreadConnectionStatus.error => colors.errorContainer,
-      ThreadConnectionStatus.disconnected => colors.surfaceContainerHighest,
     };
     final Color foreground = switch (status) {
       ThreadConnectionStatus.connected => colors.onPrimaryContainer,
       ThreadConnectionStatus.connecting => colors.onSecondaryContainer,
+      ThreadConnectionStatus.streaming => colors.onTertiaryContainer,
+      ThreadConnectionStatus.reconnecting => colors.onSecondaryContainer,
+      ThreadConnectionStatus.offline => colors.onSurfaceVariant,
       ThreadConnectionStatus.error => colors.onErrorContainer,
-      ThreadConnectionStatus.disconnected => colors.onSurfaceVariant,
     };
 
     return Container(

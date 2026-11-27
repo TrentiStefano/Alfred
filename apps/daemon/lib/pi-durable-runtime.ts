@@ -11,7 +11,6 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   AssistantEntry,
   Harness,
-  LiveDoc,
   UserEntry,
   createRegistry,
   type AgentChange,
@@ -26,6 +25,7 @@ import {
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import {
   DEFAULT_MAIN_THREAD_ID,
+  type DeltaEvent,
   type ThreadMessage,
   type ThreadMessageStatus,
   type ThreadSnapshot,
@@ -37,11 +37,15 @@ import {
   type AgentRuntime,
   type SubmitInput,
   type SubmitResult,
+  type ThreadDeltaEvent,
+  type ThreadSubscription,
 } from "./agent-runtime.ts";
 import { sanitizeErrorMessage } from "./sanitize-error.ts";
 
 const ALFRED_USER_ENTRY_KIND = "alfred.user";
 const ENTRY_SCAN_PAGE_SIZE = 256;
+const WATCH_WINDOW_MIN = 200;
+const WATCH_WINDOW_MAX = 400;
 
 export interface AgentModelRef {
   provider: string;
@@ -55,6 +59,12 @@ export interface AgentRetryOptions {
   maxAgentDelayMs?: number;
 }
 
+export interface AgentProgressOptions {
+  partialIntervalMs?: number;
+  outputIntervalMs?: number;
+  persistWithinMs?: number;
+}
+
 export interface PiDurableAgentRuntimeOptions {
   sqlitePath: string;
   threadId?: string;
@@ -63,6 +73,7 @@ export interface PiDurableAgentRuntimeOptions {
   models?: Models | (() => Models | Promise<Models>);
   model?: AgentModelRef;
   retry?: AgentRetryOptions;
+  progress?: AgentProgressOptions;
   sqlitePrefix?: string;
 }
 
@@ -276,18 +287,48 @@ async function readAllEntries(conversation: Conversation): Promise<EntryRecord[]
   return entries;
 }
 
-function buildHarnessSettings(retry: AgentRetryOptions | undefined): HarnessSettings | undefined {
-  if (retry === undefined) {
+function buildHarnessSettings(
+  retry: AgentRetryOptions | undefined,
+  progress: AgentProgressOptions | undefined,
+): HarnessSettings | undefined {
+  if (retry === undefined && progress === undefined) {
     return undefined;
   }
   return {
-    retry: {
-      ...(retry.enabled !== undefined ? { enabled: retry.enabled } : {}),
-      ...(retry.maxRetries !== undefined ? { maxRetries: retry.maxRetries } : {}),
-      ...(retry.baseDelayMs !== undefined ? { baseDelayMs: retry.baseDelayMs } : {}),
-      ...(retry.maxAgentDelayMs !== undefined ? { maxAgentDelayMs: retry.maxAgentDelayMs } : {}),
-    },
+    ...(retry !== undefined
+      ? {
+          retry: {
+            ...(retry.enabled !== undefined ? { enabled: retry.enabled } : {}),
+            ...(retry.maxRetries !== undefined ? { maxRetries: retry.maxRetries } : {}),
+            ...(retry.baseDelayMs !== undefined ? { baseDelayMs: retry.baseDelayMs } : {}),
+            ...(retry.maxAgentDelayMs !== undefined
+              ? { maxAgentDelayMs: retry.maxAgentDelayMs }
+              : {}),
+          },
+        }
+      : {}),
+    ...(progress !== undefined
+      ? {
+          progress: {
+            ...(progress.partialIntervalMs !== undefined
+              ? { partialIntervalMs: progress.partialIntervalMs }
+              : {}),
+            ...(progress.outputIntervalMs !== undefined
+              ? { outputIntervalMs: progress.outputIntervalMs }
+              : {}),
+            ...(progress.persistWithinMs !== undefined
+              ? { persistWithinMs: progress.persistWithinMs }
+              : {}),
+          },
+        }
+      : {}),
   };
+}
+
+interface ActiveGenerationState {
+  taskId: string;
+  messageId: string;
+  emittedText: string;
 }
 
 /** Create a Pi Durable-backed `AgentRuntime` for the Main Agent persisted in SQLite. */
@@ -340,7 +381,7 @@ export async function createPiDurableAgentRuntime(
     options.sqlitePrefix !== undefined ? { prefix: options.sqlitePrefix } : undefined,
   );
 
-  const settings = buildHarnessSettings(options.retry);
+  const settings = buildHarnessSettings(options.retry, options.progress);
   const harness = await Harness.open(
     storage,
     {
@@ -363,31 +404,339 @@ export async function createPiDurableAgentRuntime(
     model: configuredModel ?? null,
   };
   await conversation.configure(agentChange, BACKGROUND_CONTEXT);
+
+  const watch = await conversation.watch(BACKGROUND_CONTEXT, {
+    min: WATCH_WINDOW_MIN,
+    max: WATCH_WINDOW_MAX,
+  });
+
+  let cachedEntries: EntryRecord[] =
+    watch.value.before !== undefined
+      ? await readAllEntries(conversation)
+      : [...watch.value.entries];
+  let cachedLive = watch.value.docs["pi.live"] as LiveState | undefined;
+
+  const listeners = new Set<(delta: ThreadDeltaEvent) => void>();
+  let seq = 0;
+  let lastProcessedEntryId = 0;
+  let lastTerminalAssistantEntryId: number | undefined;
+  let lastCreatedAt: string | undefined;
+  let activeGeneration: ActiveGenerationState | undefined;
+  let lastEmittedFailureTaskId: string | undefined;
+
+  // Seed state from persisted transcript before starting the live watcher.
+  for (const entry of cachedEntries) {
+    lastProcessedEntryId = Math.max(lastProcessedEntryId, entry.id);
+    if (entry.kind === ALFRED_USER_ENTRY_KIND || UserEntry.is(entry)) {
+      const userMsg = entry.model?.[0];
+      if (userMsg?.role === "user") {
+        lastCreatedAt = new Date(userMsg.timestamp).toISOString();
+      }
+      continue;
+    }
+    if (AssistantEntry.is(entry)) {
+      const assistantMsg = entry.model?.[0];
+      if (assistantMsg?.role !== "assistant") {
+        continue;
+      }
+      lastCreatedAt = new Date(assistantMsg.timestamp).toISOString();
+      const text = extractAssistantText(assistantMsg.content);
+      if (assistantMsg.stopReason !== "toolUse" || text.trim().length > 0) {
+        lastTerminalAssistantEntryId = entry.id;
+      }
+    }
+  }
+  if (cachedLive?.run !== undefined && cachedLive.generation?.message !== undefined) {
+    const partialText = extractAssistantText(cachedLive.generation.message.content);
+    if (partialText.length > 0) {
+      activeGeneration = {
+        taskId: String(cachedLive.run.taskId),
+        messageId: `live-gen-${String(cachedLive.run.taskId)}`,
+        emittedText: partialText,
+      };
+    }
+  }
+  if (cachedLive?.runFailure !== undefined) {
+    lastEmittedFailureTaskId = String(cachedLive.runFailure.taskId);
+  }
+
+  function emitDelta(event: DeltaEvent): void {
+    seq += 1;
+    const payload: ThreadDeltaEvent = {
+      threadId: mainThreadId,
+      seq,
+      event,
+    };
+    for (const listener of listeners) {
+      listener(payload);
+    }
+  }
+
+  function processViewChange(
+    entries: readonly EntryRecord[],
+    before: number | undefined,
+    live: LiveState | undefined,
+  ): void {
+    if (entries.length > 0) {
+      const firstId = entries[0]?.id;
+      if (firstId !== undefined) {
+        cachedEntries = [...cachedEntries.filter((entry) => entry.id < firstId), ...entries];
+      }
+    } else if (before === undefined) {
+      cachedEntries = [];
+    }
+    cachedLive = live;
+
+    for (const entry of entries) {
+      if (entry.id <= lastProcessedEntryId) {
+        continue;
+      }
+      lastProcessedEntryId = entry.id;
+
+      if (entry.kind === ALFRED_USER_ENTRY_KIND || UserEntry.is(entry)) {
+        const userMsg = entry.model?.[0];
+        if (userMsg?.role !== "user") {
+          continue;
+        }
+        const createdAt = new Date(userMsg.timestamp).toISOString();
+        lastCreatedAt = createdAt;
+        const messageId = `entry-${String(entry.id)}`;
+        const requestId = extractRequestId(entry.data);
+        emitDelta({
+          kind: "turn_start",
+          messageId,
+          role: "owner",
+          text: extractUserText(userMsg),
+          ...(requestId !== undefined ? { requestId } : {}),
+          createdAt,
+        });
+        emitDelta({
+          kind: "turn_finish",
+          messageId,
+          status: "complete",
+        });
+        continue;
+      }
+
+      if (AssistantEntry.is(entry)) {
+        const assistantMsg = entry.model?.[0];
+        if (assistantMsg?.role !== "assistant") {
+          continue;
+        }
+        const createdAt = new Date(assistantMsg.timestamp).toISOString();
+        lastCreatedAt = createdAt;
+        const text = extractAssistantText(assistantMsg.content);
+
+        if (assistantMsg.stopReason === "toolUse" && text.trim().length === 0) {
+          if (activeGeneration !== undefined) {
+            emitDelta({
+              kind: "turn_finish",
+              messageId: activeGeneration.messageId,
+              status: "complete",
+            });
+            activeGeneration = undefined;
+          }
+          continue;
+        }
+
+        const messageId = activeGeneration?.messageId ?? `entry-${String(entry.id)}`;
+        if (activeGeneration === undefined) {
+          emitDelta({
+            kind: "turn_start",
+            messageId,
+            role: "agent",
+            createdAt,
+          });
+        }
+
+        if (assistantMsg.stopReason === "error") {
+          const rawError =
+            text.trim().length > 0 ? text : (assistantMsg.errorMessage ?? "Model request failed.");
+          emitDelta({
+            kind: "turn_error",
+            messageId,
+            status: "error",
+            message: sanitizeErrorMessage(rawError),
+          });
+        } else if (assistantMsg.stopReason === "aborted") {
+          const rawAborted =
+            text.trim().length > 0 ? text : (assistantMsg.errorMessage ?? "Response interrupted.");
+          emitDelta({
+            kind: "turn_error",
+            messageId,
+            status: "interrupted",
+            message: sanitizeErrorMessage(rawAborted, "Response interrupted."),
+          });
+        } else {
+          const alreadyEmitted = activeGeneration?.emittedText ?? "";
+          const remaining = text.startsWith(alreadyEmitted)
+            ? text.slice(alreadyEmitted.length)
+            : text;
+          if (remaining.length > 0) {
+            emitDelta({
+              kind: "text_delta",
+              messageId,
+              delta: remaining,
+            });
+          }
+          emitDelta({
+            kind: "turn_finish",
+            messageId,
+            status: "complete",
+          });
+        }
+
+        lastTerminalAssistantEntryId = entry.id;
+        activeGeneration = undefined;
+      }
+    }
+
+    if (live?.run !== undefined && live.generation?.message !== undefined) {
+      const partialText = extractAssistantText(live.generation.message.content);
+      if (partialText.length > 0) {
+        const runTaskId = String(live.run.taskId);
+        if (activeGeneration === undefined) {
+          const messageId = `live-gen-${runTaskId}`;
+          const createdAt = new Date(live.generation.message.timestamp).toISOString();
+          activeGeneration = {
+            taskId: runTaskId,
+            messageId,
+            emittedText: partialText,
+          };
+          emitDelta({
+            kind: "turn_start",
+            messageId,
+            role: "agent",
+            createdAt,
+          });
+          emitDelta({
+            kind: "text_delta",
+            messageId,
+            delta: partialText,
+          });
+        } else if (
+          activeGeneration.taskId === runTaskId &&
+          partialText.length > activeGeneration.emittedText.length &&
+          partialText.startsWith(activeGeneration.emittedText)
+        ) {
+          const delta = partialText.slice(activeGeneration.emittedText.length);
+          activeGeneration.emittedText = partialText;
+          emitDelta({
+            kind: "text_delta",
+            messageId: activeGeneration.messageId,
+            delta,
+          });
+        }
+      }
+    }
+
+    if (live?.runFailure !== undefined) {
+      const failureFirst = live.runFailure.first;
+      const failureAlreadyInTranscript =
+        failureFirst !== undefined &&
+        lastTerminalAssistantEntryId !== undefined &&
+        lastTerminalAssistantEntryId >= failureFirst;
+      const failureTaskId = String(live.runFailure.taskId);
+
+      if (!failureAlreadyInTranscript && lastEmittedFailureTaskId !== failureTaskId) {
+        const status =
+          live.runFailure.reason === "aborted" || live.runFailure.reason === "interrupted"
+            ? "interrupted"
+            : "error";
+        const message = formatRunFailureMessage(live.runFailure, modelsInitError);
+        if (activeGeneration !== undefined) {
+          emitDelta({
+            kind: "turn_error",
+            messageId: activeGeneration.messageId,
+            status,
+            message,
+          });
+          activeGeneration = undefined;
+        } else {
+          const messageId = `failure-${failureTaskId}`;
+          emitDelta({
+            kind: "turn_start",
+            messageId,
+            role: "agent",
+            createdAt: lastCreatedAt ?? new Date().toISOString(),
+          });
+          emitDelta({
+            kind: "turn_error",
+            messageId,
+            status,
+            message,
+          });
+        }
+        lastEmittedFailureTaskId = failureTaskId;
+      }
+    } else {
+      lastEmittedFailureTaskId = undefined;
+    }
+
+    if (live?.run === undefined && activeGeneration !== undefined) {
+      emitDelta({
+        kind: "turn_error",
+        messageId: activeGeneration.messageId,
+        status: "interrupted",
+        message: "Response interrupted.",
+      });
+      activeGeneration = undefined;
+    }
+  }
+
+  watch.start((call) => {
+    if (call.kind === "value") {
+      processViewChange(call.value.entries, call.value.before, call.value.docs["pi.live"]);
+    }
+    return Promise.resolve();
+  });
+
   harness.resume();
 
   let closePromise: Promise<void> | undefined;
 
-  async function buildSnapshot(): Promise<ThreadSnapshot> {
-    const [entries, live] = await Promise.all([
-      readAllEntries(conversation),
-      harness.snapshot(LiveDoc, conversation.id, BACKGROUND_CONTEXT),
-    ]);
+  function buildSnapshotSync(): ThreadSnapshot {
     return {
       id: mainThreadId,
       agentName: agentDef.name,
-      status: deriveThreadStatus(live),
-      messages: mapEntriesToMessages(entries, live, modelsInitError),
+      status: deriveThreadStatus(cachedLive),
+      messages: mapEntriesToMessages(cachedEntries, cachedLive, modelsInitError),
     };
   }
 
   return {
-    async getSnapshot(threadId = mainThreadId): Promise<ThreadSnapshot> {
+    getSnapshot(threadId = mainThreadId): Promise<ThreadSnapshot> {
       if (threadId !== mainThreadId) {
-        throw new AgentRuntimeError("unknown_thread", `Unknown thread "${threadId}".`, {
-          threadId,
-        });
+        return Promise.reject(
+          new AgentRuntimeError("unknown_thread", `Unknown thread "${threadId}".`, {
+            threadId,
+          }),
+        );
       }
-      return buildSnapshot();
+      return Promise.resolve(buildSnapshotSync());
+    },
+
+    subscribeThread(
+      threadId: string,
+      listener: (delta: ThreadDeltaEvent) => void,
+    ): Promise<ThreadSubscription> {
+      if (threadId !== mainThreadId) {
+        return Promise.reject(
+          new AgentRuntimeError("unknown_thread", `Unknown thread "${threadId}".`, {
+            threadId,
+          }),
+        );
+      }
+      const snapshot = buildSnapshotSync();
+      const currentSeq = seq;
+      listeners.add(listener);
+      return Promise.resolve({
+        snapshot,
+        seq: currentSeq,
+        unsubscribe: () => {
+          listeners.delete(listener);
+        },
+      });
     },
 
     async submit(input: SubmitInput): Promise<SubmitResult> {
@@ -425,23 +774,20 @@ export async function createPiDurableAgentRuntime(
         return { submissionId, deduplicated: false };
       }, BACKGROUND_CONTEXT);
 
-      const submission = await harness.submission(admission.submissionId, BACKGROUND_CONTEXT);
-      if (submission !== undefined) {
-        await submission.wait(BACKGROUND_CONTEXT);
-      }
-
-      const snapshot = await buildSnapshot();
       return {
         threadId: input.threadId,
         requestId: input.requestId,
         submissionId: String(admission.submissionId),
         deduplicated: admission.deduplicated,
-        snapshot,
       };
     },
 
     close(): Promise<void> {
-      closePromise ??= harness.close(BACKGROUND_CONTEXT);
+      closePromise ??= (async () => {
+        await watch.stop();
+        listeners.clear();
+        await harness.close(BACKGROUND_CONTEXT);
+      })();
       return closePromise;
     },
   };

@@ -3,6 +3,7 @@ import validFixture from "../ws-valid.fixture.json" with { type: "json" };
 import invalidFixture from "../ws-invalid.fixture.json" with { type: "json" };
 import {
   createAckMessage,
+  createDeltaMessage,
   createErrorMessage,
   createHelloMessage,
   createSnapshotMessage,
@@ -81,6 +82,78 @@ describe("WebSocket wire protocol contract", () => {
         message: "Thread not found.",
         threadId: "missing",
         requestId: "req-404",
+      }),
+    );
+    expect(parseDaemonMessage(validFixture.daemon.deltaTurnStartOwner)).toEqual(
+      createDeltaMessage({
+        threadId: "main",
+        seq: 1,
+        event: {
+          kind: "turn_start",
+          messageId: "entry-1",
+          role: "owner",
+          text: "Hello Alfred",
+          requestId: "req-001",
+          createdAt: "2026-11-27T12:00:00.000Z",
+        },
+      }),
+    );
+    expect(parseDaemonMessage(validFixture.daemon.deltaTurnStartAgent)).toEqual(
+      createDeltaMessage({
+        threadId: "main",
+        seq: 3,
+        event: {
+          kind: "turn_start",
+          messageId: "live-gen-1",
+          role: "agent",
+          createdAt: "2026-11-27T12:00:01.000Z",
+        },
+      }),
+    );
+    expect(parseDaemonMessage(validFixture.daemon.deltaTextDelta)).toEqual(
+      createDeltaMessage({
+        threadId: "main",
+        seq: 4,
+        event: {
+          kind: "text_delta",
+          messageId: "live-gen-1",
+          delta: "Good day.",
+        },
+      }),
+    );
+    expect(parseDaemonMessage(validFixture.daemon.deltaTurnFinish)).toEqual(
+      createDeltaMessage({
+        threadId: "main",
+        seq: 5,
+        event: {
+          kind: "turn_finish",
+          messageId: "live-gen-1",
+          status: "complete",
+        },
+      }),
+    );
+    expect(parseDaemonMessage(validFixture.daemon.deltaTurnError)).toEqual(
+      createDeltaMessage({
+        threadId: "main",
+        seq: 6,
+        event: {
+          kind: "turn_error",
+          messageId: "live-gen-2",
+          status: "error",
+          message: "Model request failed.",
+        },
+      }),
+    );
+    expect(parseDaemonMessage(validFixture.daemon.deltaTurnInterrupted)).toEqual(
+      createDeltaMessage({
+        threadId: "main",
+        seq: 7,
+        event: {
+          kind: "turn_error",
+          messageId: "live-gen-3",
+          status: "interrupted",
+          message: "Response interrupted.",
+        },
       }),
     );
   });

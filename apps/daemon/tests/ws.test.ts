@@ -9,7 +9,13 @@ import {
   parseDaemonMessage,
   type DaemonMessage,
 } from "@alfred/protocol";
-import { createStubAgentRuntime, startDaemonServer, type DaemonServer } from "../index.ts";
+import {
+  createStubAgentRuntime,
+  startDaemonServer,
+  type AgentRuntime,
+  type DaemonServer,
+  type ThreadDeltaEvent,
+} from "../index.ts";
 
 interface WsTestClient {
   nextMessage(): Promise<DaemonMessage>;
@@ -195,7 +201,7 @@ describe("daemon /ws handshake & snapshot", () => {
     expect(closed.code).toBe(1001);
   });
 
-  it("handles submit via stub AgentRuntime, sends ack and updated snapshot, and deduplicates requestId", async () => {
+  it("handles submit via stub AgentRuntime, sends ack and sequenced deltas, and deduplicates requestId", async () => {
     server = await startDaemonServer({ host: "127.0.0.1", port: 0 });
     const client = await connectWs(server.port);
 
@@ -220,21 +226,72 @@ describe("daemon /ws handshake & snapshot", () => {
       deduplicated: false,
     });
 
-    const snapshot1 = await client.nextMessage();
-    expect(snapshot1.type).toBe("snapshot");
-    if (snapshot1.type === "snapshot") {
-      expect(snapshot1.seq).toBe(1);
-      expect(snapshot1.thread.status).toBe("idle");
-      expect(snapshot1.thread.messages).toHaveLength(2);
-      expect(snapshot1.thread.messages[0]?.role).toBe("owner");
-      expect(snapshot1.thread.messages[0]?.text).toBe("Hello Alfred");
-      expect(snapshot1.thread.messages[0]?.status).toBe("complete");
-      expect(snapshot1.thread.messages[0]?.requestId).toBe("req-100");
-      expect(snapshot1.thread.messages[1]?.role).toBe("agent");
-      expect(snapshot1.thread.messages[1]?.status).toBe("complete");
-    }
+    const d1 = await client.nextMessage();
+    const d2 = await client.nextMessage();
+    const d3 = await client.nextMessage();
+    const d4 = await client.nextMessage();
+    const d5 = await client.nextMessage();
+    expect(d1).toEqual({
+      type: "delta",
+      protocolVersion: PROTOCOL_VERSION,
+      threadId: DEFAULT_MAIN_THREAD_ID,
+      seq: 1,
+      event: {
+        kind: "turn_start",
+        messageId: "msg-1",
+        role: "owner",
+        text: "Hello Alfred",
+        requestId: "req-100",
+        createdAt: expect.any(String) as string,
+      },
+    });
+    expect(d2).toEqual({
+      type: "delta",
+      protocolVersion: PROTOCOL_VERSION,
+      threadId: DEFAULT_MAIN_THREAD_ID,
+      seq: 2,
+      event: {
+        kind: "turn_finish",
+        messageId: "msg-1",
+        status: "complete",
+      },
+    });
+    expect(d3).toEqual({
+      type: "delta",
+      protocolVersion: PROTOCOL_VERSION,
+      threadId: DEFAULT_MAIN_THREAD_ID,
+      seq: 3,
+      event: {
+        kind: "turn_start",
+        messageId: "msg-2",
+        role: "agent",
+        createdAt: expect.any(String) as string,
+      },
+    });
+    expect(d4).toEqual({
+      type: "delta",
+      protocolVersion: PROTOCOL_VERSION,
+      threadId: DEFAULT_MAIN_THREAD_ID,
+      seq: 4,
+      event: {
+        kind: "text_delta",
+        messageId: "msg-2",
+        delta: "Stub Alfred received: Hello Alfred",
+      },
+    });
+    expect(d5).toEqual({
+      type: "delta",
+      protocolVersion: PROTOCOL_VERSION,
+      threadId: DEFAULT_MAIN_THREAD_ID,
+      seq: 5,
+      event: {
+        kind: "turn_finish",
+        messageId: "msg-2",
+        status: "complete",
+      },
+    });
 
-    // Re-submit the same requestId: deduplicates without adding messages.
+    // Re-submit the same requestId: deduplicates without adding messages or emitting deltas.
     client.sendJson(
       createSubmitMessage({
         threadId: DEFAULT_MAIN_THREAD_ID,
@@ -252,17 +309,113 @@ describe("daemon /ws handshake & snapshot", () => {
       deduplicated: true,
     });
 
-    // A second client connecting later receives the persisted 2-message Thread in initial snapshot.
+    // A second client connecting later receives the persisted 2-message Thread in initial snapshot with seq 5.
     const secondClient = await connectWs(server.port);
     secondClient.sendJson(createHelloMessage());
     const reconnectSnapshot = await secondClient.nextMessage();
     expect(reconnectSnapshot.type).toBe("snapshot");
     if (reconnectSnapshot.type === "snapshot") {
-      expect(reconnectSnapshot.seq).toBe(0);
+      expect(reconnectSnapshot.seq).toBe(5);
       expect(reconnectSnapshot.thread.messages).toHaveLength(2);
+      expect(reconnectSnapshot.thread.messages[0]?.requestId).toBe("req-100");
+      expect(reconnectSnapshot.thread.messages[1]?.text).toBe("Stub Alfred received: Hello Alfred");
     }
 
     await secondClient.close();
+    await client.close();
+  });
+
+  it("aligns snapshot.seq with buffered deltas during subscribeThread without duplicates or gaps", async () => {
+    let resolveRelease!: () => void;
+    const releasePromise = new Promise<void>((resolve) => {
+      resolveRelease = resolve;
+    });
+    let resolveSubscribeStarted!: () => void;
+    const subscribeStartedPromise = new Promise<void>((resolve) => {
+      resolveSubscribeStarted = resolve;
+    });
+    const listeners = new Set<(delta: ThreadDeltaEvent) => void>();
+
+    const runtime: AgentRuntime = {
+      getSnapshot() {
+        return Promise.resolve({
+          id: DEFAULT_MAIN_THREAD_ID,
+          agentName: DEFAULT_MAIN_AGENT_NAME,
+          status: "streaming",
+          messages: [],
+        });
+      },
+      async subscribeThread(threadId, listener) {
+        listeners.add(listener);
+        resolveSubscribeStarted();
+        await releasePromise;
+        return {
+          seq: 1,
+          snapshot: {
+            id: threadId,
+            agentName: DEFAULT_MAIN_AGENT_NAME,
+            status: "streaming",
+            messages: [
+              {
+                id: "m1",
+                role: "agent",
+                text: "First ",
+                status: "streaming",
+                createdAt: "2026-11-27T12:00:00.000Z",
+              },
+            ],
+          },
+          unsubscribe: () => {
+            listeners.delete(listener);
+          },
+        };
+      },
+      submit(input) {
+        return Promise.resolve({
+          threadId: input.threadId,
+          requestId: input.requestId,
+          submissionId: "sub-mock",
+          deduplicated: false,
+        });
+      },
+    };
+
+    server = await startDaemonServer({ host: "127.0.0.1", port: 0, agentRuntime: runtime });
+    const client = await connectWs(server.port);
+    client.sendJson(createHelloMessage());
+
+    await subscribeStartedPromise;
+    // Emit seq 1 (already inside snapshot) and seq 2 (new) while subscribeThread is still pending.
+    for (const listener of listeners) {
+      listener({
+        threadId: DEFAULT_MAIN_THREAD_ID,
+        seq: 1,
+        event: { kind: "text_delta", messageId: "m1", delta: "First " },
+      });
+      listener({
+        threadId: DEFAULT_MAIN_THREAD_ID,
+        seq: 2,
+        event: { kind: "text_delta", messageId: "m1", delta: "Second" },
+      });
+    }
+    resolveRelease();
+
+    const snap = await client.nextMessage();
+    expect(snap.type).toBe("snapshot");
+    if (snap.type === "snapshot") {
+      expect(snap.seq).toBe(1);
+      expect(snap.thread.messages[0]?.text).toBe("First ");
+    }
+
+    const next = await client.nextMessage();
+    expect(next).toEqual({
+      type: "delta",
+      protocolVersion: PROTOCOL_VERSION,
+      threadId: DEFAULT_MAIN_THREAD_ID,
+      seq: 2,
+      event: { kind: "text_delta", messageId: "m1", delta: "Second" },
+    });
+
     await client.close();
   });
 
