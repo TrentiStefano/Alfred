@@ -14,7 +14,8 @@
     "lint": "eslint --max-warnings 0 .",
     "lint:boundaries": "node scripts/lint-boundaries.ts",
     "test": "vitest run",
-    "check:repo": "node scripts/check-repo.ts"
+    "check:repo": "node scripts/check-repo.ts",
+    "skills:sync": "node scripts/sync-agent-skills.ts"
   },
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "4.8.1",
