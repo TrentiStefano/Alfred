@@ -18,9 +18,11 @@ String _healthJson({bool ok = true, int protocolVersion = 1}) {
 
 Future<void> _pumpWithClient(WidgetTester tester, MockClient client) async {
   await tester.pumpWidget(
-    AlfredApp(
-      daemonBaseUri: Uri.parse('http://127.0.0.1:4040'),
-      httpClient: client,
+    MaterialApp(
+      home: HealthCheckScreen(
+        daemonBaseUri: Uri.parse('http://127.0.0.1:4040'),
+        httpClient: client,
+      ),
     ),
   );
   await tester.pumpAndSettle();

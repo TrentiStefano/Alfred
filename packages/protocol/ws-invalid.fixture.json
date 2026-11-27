@@ -1,0 +1,177 @@
+{
+  "client": [
+    {
+      "name": "not_an_object",
+      "payload": null
+    },
+    {
+      "name": "unknown_type",
+      "payload": {
+        "type": "ping"
+      }
+    },
+    {
+      "name": "hello_missing_version",
+      "payload": {
+        "type": "hello"
+      }
+    },
+    {
+      "name": "hello_non_integer_version",
+      "payload": {
+        "type": "hello",
+        "protocolVersion": 1.5
+      }
+    },
+    {
+      "name": "hello_zero_version",
+      "payload": {
+        "type": "hello",
+        "protocolVersion": 0
+      }
+    },
+    {
+      "name": "hello_extra_field",
+      "payload": {
+        "type": "hello",
+        "protocolVersion": 1,
+        "extra": true
+      }
+    },
+    {
+      "name": "submit_missing_request_id",
+      "payload": {
+        "type": "submit",
+        "threadId": "main",
+        "text": "Hi"
+      }
+    },
+    {
+      "name": "submit_blank_text",
+      "payload": {
+        "type": "submit",
+        "threadId": "main",
+        "requestId": "req-1",
+        "text": "   "
+      }
+    },
+    {
+      "name": "submit_empty_thread_id",
+      "payload": {
+        "type": "submit",
+        "threadId": "",
+        "requestId": "req-1",
+        "text": "Hi"
+      }
+    }
+  ],
+  "daemon": [
+    {
+      "name": "not_an_object",
+      "payload": "hello"
+    },
+    {
+      "name": "unknown_type",
+      "payload": {
+        "type": "pong"
+      }
+    },
+    {
+      "name": "snapshot_negative_seq",
+      "payload": {
+        "type": "snapshot",
+        "protocolVersion": 1,
+        "seq": -1,
+        "thread": {
+          "id": "main",
+          "agentName": "Alfred",
+          "status": "idle",
+          "messages": []
+        }
+      }
+    },
+    {
+      "name": "snapshot_invalid_role_assistant",
+      "payload": {
+        "type": "snapshot",
+        "protocolVersion": 1,
+        "seq": 0,
+        "thread": {
+          "id": "main",
+          "agentName": "Alfred",
+          "status": "idle",
+          "messages": [
+            {
+              "id": "m1",
+              "role": "assistant",
+              "text": "hi",
+              "status": "complete",
+              "createdAt": "2026-11-27T12:00:00.000Z"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "snapshot_invalid_message_status",
+      "payload": {
+        "type": "snapshot",
+        "protocolVersion": 1,
+        "seq": 0,
+        "thread": {
+          "id": "main",
+          "agentName": "Alfred",
+          "status": "idle",
+          "messages": [
+            {
+              "id": "m1",
+              "role": "agent",
+              "text": "hi",
+              "status": "pending",
+              "createdAt": "2026-11-27T12:00:00.000Z"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "snapshot_invalid_thread_status",
+      "payload": {
+        "type": "snapshot",
+        "protocolVersion": 1,
+        "seq": 0,
+        "thread": {
+          "id": "main",
+          "agentName": "Alfred",
+          "status": "busy",
+          "messages": []
+        }
+      }
+    },
+    {
+      "name": "ack_missing_submission_id",
+      "payload": {
+        "type": "ack",
+        "threadId": "main",
+        "requestId": "req-1"
+      }
+    },
+    {
+      "name": "error_unknown_code",
+      "payload": {
+        "type": "error",
+        "code": "boom",
+        "message": "failed"
+      }
+    },
+    {
+      "name": "error_extra_field",
+      "payload": {
+        "type": "error",
+        "code": "invalid_message",
+        "message": "bad",
+        "extra": 1
+      }
+    }
+  ]
+}
