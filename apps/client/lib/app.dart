@@ -19,12 +19,16 @@ class AlfredApp extends StatelessWidget {
     this.httpClient,
     this.webSocketChannelFactory,
     this.requestIdGenerator,
+    this.reconnectDelay,
+    this.maxReconnectAttempts = 5,
   });
 
   final Uri daemonBaseUri;
   final http.Client? httpClient;
   final WebSocketChannelFactory? webSocketChannelFactory;
   final String Function()? requestIdGenerator;
+  final ReconnectDelayBuilder? reconnectDelay;
+  final int maxReconnectAttempts;
 
   @override
   Widget build(BuildContext context) {
@@ -38,6 +42,8 @@ class AlfredApp extends StatelessWidget {
         httpClient: httpClient,
         webSocketChannelFactory: webSocketChannelFactory,
         requestIdGenerator: requestIdGenerator,
+        reconnectDelay: reconnectDelay,
+        maxReconnectAttempts: maxReconnectAttempts,
       ),
     );
   }

@@ -89,6 +89,55 @@ export const AckMessageSchema = z.strictObject({
 });
 export type AckMessage = z.infer<typeof AckMessageSchema>;
 
+export const DeltaTurnStartEventSchema = z.strictObject({
+  kind: z.literal("turn_start"),
+  messageId: z.string().min(1),
+  role: ThreadMessageRoleSchema,
+  text: z.string().exactOptional(),
+  requestId: z.string().min(1).exactOptional(),
+  createdAt: z.iso.datetime(),
+});
+export type DeltaTurnStartEvent = z.infer<typeof DeltaTurnStartEventSchema>;
+
+export const DeltaTextDeltaEventSchema = z.strictObject({
+  kind: z.literal("text_delta"),
+  messageId: z.string().min(1),
+  delta: z.string().min(1),
+});
+export type DeltaTextDeltaEvent = z.infer<typeof DeltaTextDeltaEventSchema>;
+
+export const DeltaTurnFinishEventSchema = z.strictObject({
+  kind: z.literal("turn_finish"),
+  messageId: z.string().min(1),
+  status: z.literal("complete"),
+});
+export type DeltaTurnFinishEvent = z.infer<typeof DeltaTurnFinishEventSchema>;
+
+export const DeltaTurnErrorEventSchema = z.strictObject({
+  kind: z.literal("turn_error"),
+  messageId: z.string().min(1),
+  status: z.enum(["error", "interrupted"]),
+  message: z.string().min(1),
+});
+export type DeltaTurnErrorEvent = z.infer<typeof DeltaTurnErrorEventSchema>;
+
+export const DeltaEventSchema = z.discriminatedUnion("kind", [
+  DeltaTurnStartEventSchema,
+  DeltaTextDeltaEventSchema,
+  DeltaTurnFinishEventSchema,
+  DeltaTurnErrorEventSchema,
+]);
+export type DeltaEvent = z.infer<typeof DeltaEventSchema>;
+
+export const DeltaMessageSchema = z.strictObject({
+  type: z.literal("delta"),
+  protocolVersion: z.number().int().positive(),
+  threadId: z.string().min(1),
+  seq: z.number().int().positive(),
+  event: DeltaEventSchema,
+});
+export type DeltaMessage = z.infer<typeof DeltaMessageSchema>;
+
 export const ErrorMessageSchema = z.strictObject({
   type: z.literal("error"),
   code: ProtocolErrorCodeSchema,
@@ -102,6 +151,7 @@ export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
 
 export const DaemonMessageSchema = z.discriminatedUnion("type", [
   SnapshotMessageSchema,
+  DeltaMessageSchema,
   AckMessageSchema,
   ErrorMessageSchema,
 ]);
@@ -159,6 +209,22 @@ export function createAckMessage(input: {
     requestId: input.requestId,
     submissionId: input.submissionId,
     ...(input.deduplicated !== undefined ? { deduplicated: input.deduplicated } : {}),
+  });
+}
+
+/** Create and validate a sequenced `delta` frame. */
+export function createDeltaMessage(input: {
+  protocolVersion?: number;
+  threadId: string;
+  seq: number;
+  event: DeltaEvent;
+}): DeltaMessage {
+  return DeltaMessageSchema.parse({
+    type: "delta",
+    protocolVersion: input.protocolVersion ?? PROTOCOL_VERSION,
+    threadId: input.threadId,
+    seq: input.seq,
+    event: input.event,
   });
 }
 

@@ -317,6 +317,207 @@ class ThreadSnapshot {
   }
 }
 
+sealed class DeltaEvent {
+  const DeltaEvent();
+
+  Map<String, Object?> toJson();
+
+  static DeltaEvent fromJsonObject(Object? decoded) {
+    final Map<String, Object?> map = _expectObject(decoded, 'DeltaEvent');
+    final Object? kind = map['kind'];
+    return switch (kind) {
+      'turn_start' => DeltaTurnStartEvent.fromJsonObject(map),
+      'text_delta' => DeltaTextDeltaEvent.fromJsonObject(map),
+      'turn_finish' => DeltaTurnFinishEvent.fromJsonObject(map),
+      'turn_error' => DeltaTurnErrorEvent.fromJsonObject(map),
+      _ => throw FormatException('Unknown delta event kind: $kind'),
+    };
+  }
+}
+
+final class DeltaTurnStartEvent extends DeltaEvent {
+  const DeltaTurnStartEvent({
+    required this.messageId,
+    required this.role,
+    required this.createdAt,
+    this.text,
+    this.requestId,
+  });
+
+  final String messageId;
+  final ThreadMessageRole role;
+  final String? text;
+  final String? requestId;
+  final String createdAt;
+
+  static DeltaTurnStartEvent fromJsonObject(Object? decoded) {
+    final Map<String, Object?> map = _expectStrictObject(
+      decoded,
+      allowedKeys: const <String>{
+        'kind',
+        'messageId',
+        'role',
+        'text',
+        'requestId',
+        'createdAt',
+      },
+      context: 'delta.event(turn_start)',
+    );
+    _expectLiteral(map['kind'], 'turn_start', 'delta.event.kind');
+    final Object? rawText = map['text'];
+    if (rawText != null && rawText is! String) {
+      throw const FormatException('delta.event.text must be a string.');
+    }
+    final String createdAt = _expectNonEmptyString(
+      map['createdAt'],
+      'delta.event.createdAt',
+    );
+    if (DateTime.tryParse(createdAt) == null) {
+      throw FormatException(
+        'delta.event.createdAt must be an ISO-8601 timestamp: $createdAt',
+      );
+    }
+    return DeltaTurnStartEvent(
+      messageId: _expectNonEmptyString(
+        map['messageId'],
+        'delta.event.messageId',
+      ),
+      role: ThreadMessageRole.parse(map['role']),
+      text: rawText as String?,
+      requestId: _expectOptionalNonEmptyString(
+        map['requestId'],
+        'delta.event.requestId',
+      ),
+      createdAt: createdAt,
+    );
+  }
+
+  @override
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'kind': 'turn_start',
+      'messageId': messageId,
+      'role': role.wireValue,
+      if (text != null) 'text': text,
+      if (requestId != null) 'requestId': requestId,
+      'createdAt': createdAt,
+    };
+  }
+}
+
+final class DeltaTextDeltaEvent extends DeltaEvent {
+  const DeltaTextDeltaEvent({required this.messageId, required this.delta});
+
+  final String messageId;
+  final String delta;
+
+  static DeltaTextDeltaEvent fromJsonObject(Object? decoded) {
+    final Map<String, Object?> map = _expectStrictObject(
+      decoded,
+      allowedKeys: const <String>{'kind', 'messageId', 'delta'},
+      context: 'delta.event(text_delta)',
+    );
+    _expectLiteral(map['kind'], 'text_delta', 'delta.event.kind');
+    return DeltaTextDeltaEvent(
+      messageId: _expectNonEmptyString(
+        map['messageId'],
+        'delta.event.messageId',
+      ),
+      delta: _expectNonEmptyString(map['delta'], 'delta.event.delta'),
+    );
+  }
+
+  @override
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'kind': 'text_delta',
+      'messageId': messageId,
+      'delta': delta,
+    };
+  }
+}
+
+final class DeltaTurnFinishEvent extends DeltaEvent {
+  const DeltaTurnFinishEvent({
+    required this.messageId,
+    this.status = ThreadMessageStatus.complete,
+  });
+
+  final String messageId;
+  final ThreadMessageStatus status;
+
+  static DeltaTurnFinishEvent fromJsonObject(Object? decoded) {
+    final Map<String, Object?> map = _expectStrictObject(
+      decoded,
+      allowedKeys: const <String>{'kind', 'messageId', 'status'},
+      context: 'delta.event(turn_finish)',
+    );
+    _expectLiteral(map['kind'], 'turn_finish', 'delta.event.kind');
+    _expectLiteral(map['status'], 'complete', 'delta.event.status');
+    return DeltaTurnFinishEvent(
+      messageId: _expectNonEmptyString(
+        map['messageId'],
+        'delta.event.messageId',
+      ),
+    );
+  }
+
+  @override
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'kind': 'turn_finish',
+      'messageId': messageId,
+      'status': status.wireValue,
+    };
+  }
+}
+
+final class DeltaTurnErrorEvent extends DeltaEvent {
+  const DeltaTurnErrorEvent({
+    required this.messageId,
+    required this.status,
+    required this.message,
+  });
+
+  final String messageId;
+  final ThreadMessageStatus status;
+  final String message;
+
+  static DeltaTurnErrorEvent fromJsonObject(Object? decoded) {
+    final Map<String, Object?> map = _expectStrictObject(
+      decoded,
+      allowedKeys: const <String>{'kind', 'messageId', 'status', 'message'},
+      context: 'delta.event(turn_error)',
+    );
+    _expectLiteral(map['kind'], 'turn_error', 'delta.event.kind');
+    final ThreadMessageStatus status = ThreadMessageStatus.parse(map['status']);
+    if (status != ThreadMessageStatus.error &&
+        status != ThreadMessageStatus.interrupted) {
+      throw FormatException(
+        'delta.event.status must be "error" or "interrupted": ${status.wireValue}',
+      );
+    }
+    return DeltaTurnErrorEvent(
+      messageId: _expectNonEmptyString(
+        map['messageId'],
+        'delta.event.messageId',
+      ),
+      status: status,
+      message: _expectNonEmptyString(map['message'], 'delta.event.message'),
+    );
+  }
+
+  @override
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'kind': 'turn_error',
+      'messageId': messageId,
+      'status': status.wireValue,
+      'message': message,
+    };
+  }
+}
+
 sealed class DaemonMessage {
   const DaemonMessage();
 
@@ -327,9 +528,59 @@ sealed class DaemonMessage {
     final Object? type = map['type'];
     return switch (type) {
       'snapshot' => DaemonSnapshotMessage.fromJsonObject(map),
+      'delta' => DaemonDeltaMessage.fromJsonObject(map),
       'ack' => DaemonAckMessage.fromJsonObject(map),
       'error' => DaemonErrorMessage.fromJsonObject(map),
       _ => throw FormatException('Unknown daemon message type: $type'),
+    };
+  }
+}
+
+final class DaemonDeltaMessage extends DaemonMessage {
+  const DaemonDeltaMessage({
+    required this.protocolVersion,
+    required this.threadId,
+    required this.seq,
+    required this.event,
+  });
+
+  final int protocolVersion;
+  final String threadId;
+  final int seq;
+  final DeltaEvent event;
+
+  static DaemonDeltaMessage fromJsonObject(Object? decoded) {
+    final Map<String, Object?> map = _expectStrictObject(
+      decoded,
+      allowedKeys: const <String>{
+        'type',
+        'protocolVersion',
+        'threadId',
+        'seq',
+        'event',
+      },
+      context: 'delta',
+    );
+    _expectLiteral(map['type'], 'delta', 'delta.type');
+    return DaemonDeltaMessage(
+      protocolVersion: _expectPositiveInt(
+        map['protocolVersion'],
+        'delta.protocolVersion',
+      ),
+      threadId: _expectNonEmptyString(map['threadId'], 'delta.threadId'),
+      seq: _expectPositiveInt(map['seq'], 'delta.seq'),
+      event: DeltaEvent.fromJsonObject(map['event']),
+    );
+  }
+
+  @override
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'type': 'delta',
+      'protocolVersion': protocolVersion,
+      'threadId': threadId,
+      'seq': seq,
+      'event': event.toJson(),
     };
   }
 }
