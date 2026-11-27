@@ -22,6 +22,21 @@ const STEPS: readonly Step[] = [
   },
   { name: "test", script: "test", fix: "Make the failing tests pass; do not skip or delete them." },
   {
+    name: "flutter:format",
+    script: "flutter:format:check",
+    fix: "Run `pnpm flutter:format` to rewrite the Dart files.",
+  },
+  {
+    name: "flutter:analyze",
+    script: "flutter:analyze",
+    fix: "Fix the Dart analyzer findings in apps/client.",
+  },
+  {
+    name: "flutter:test",
+    script: "flutter:test",
+    fix: "Make the failing Flutter tests pass in apps/client.",
+  },
+  {
     name: "repo",
     script: "check:repo",
     fix: "Keep local-only config out of git and AGENTS.md short.",

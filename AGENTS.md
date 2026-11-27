@@ -13,7 +13,7 @@ No escape hatches: `eslint-disable`, `@ts-ignore`, `@ts-expect-error` and `@ts-n
 
 ```
 apps/daemon/               always-on server (Pi Durable runtime, Approvals, MCP bridge, Web Push)
-apps/pwa/                  iPhone PWA (Chat, Approvals inbox, Live state)
+apps/client/               Flutter client (Desktop + iPhone Web PWA)
 packages/protocol/         pure Zod schemas + types, zero I/O
 packages/plugin-sdk/       Connector contract, RiskLevel, contract test suite
 packages/connector-<name>/ native Connectors (flat, one package each)
@@ -29,7 +29,7 @@ docs/agents/               skill config (issue tracker, triage labels, domain do
 1. `packages/protocol` imports no workspace package and no Node built-ins.
 2. `packages/plugin-sdk` imports only `@alfred/protocol`.
 3. `packages/connector-*` import only `@alfred/plugin-sdk` and `@alfred/protocol`.
-4. `apps/pwa` imports only `@alfred/protocol`. Nothing imports `apps/daemon`.
+4. `apps/client` is Flutter/Dart (no TS imports; talks to daemon over HTTP/WebSocket). Nothing imports `apps/daemon`.
 
 Packages are deep modules: see [packages/README.md](packages/README.md) before adding or importing one.
 

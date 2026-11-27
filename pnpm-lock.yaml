@@ -54,12 +54,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/protocol
 
-  apps/pwa:
-    dependencies:
-      '@alfred/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-
   packages/plugin-sdk:
     dependencies:
       '@alfred/protocol':

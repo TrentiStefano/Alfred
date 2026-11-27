@@ -27,7 +27,7 @@ packages/<name>/
 | `packages/protocol`    | nothing in the workspace, no Node built-ins |
 | `packages/plugin-sdk`  | `@alfred/protocol`                          |
 | `packages/connector-*` | `@alfred/plugin-sdk`, `@alfred/protocol`    |
-| `apps/pwa`             | `@alfred/protocol`                          |
+| `apps/client`          | Flutter/Dart (HTTP/WebSocket to daemon)     |
 | `apps/daemon`          | any package (nothing may import the daemon) |
 
 Connectors are flat packages named `packages/connector-<system>`, not nested under `packages/connectors/`.
