@@ -1,8 +1,10 @@
 // Repo hygiene that no linter covers:
 //  1. Machine-specific config and secrets are never tracked (this repo is public).
 //  2. AGENTS.md stays a map, not a manual (<= 80 lines).
+//  3. Claude Code and Antigravity run the same skills and procedure (scripts/agent-skills.ts).
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { skillTreeDrift, workflowDrift } from "./agent-skills.ts";
 
 const AGENTS_MAX_LINES = 80;
 
@@ -47,9 +49,22 @@ if (agentsLines > AGENTS_MAX_LINES) {
   );
 }
 
+for (const drift of skillTreeDrift()) {
+  problems.push(
+    `Skill copies drifted: ${drift}. Claude Code (.claude/skills) and Antigravity (.agents/skills) must run identical skills: reinstall both from one commit with \`npx skills@latest add mattpocock/skills -a claude-code -a antigravity --copy -y -s <skills>\`, then \`pnpm skills:sync\`.`,
+  );
+}
+for (const drift of workflowDrift()) {
+  problems.push(
+    `Antigravity workflow out of sync: ${drift}. Run \`pnpm skills:sync\` (never edit .agents/workflows by hand).`,
+  );
+}
+
 if (problems.length > 0) {
   process.stderr.write(`check:repo failed:\n- ${problems.join("\n- ")}\n`);
   process.exitCode = 1;
 } else {
-  process.stdout.write("check:repo: no local-only files tracked, AGENTS.md within budget.\n");
+  process.stdout.write(
+    "check:repo: no local-only files tracked, AGENTS.md within budget, agent skills in sync.\n",
+  );
 }
