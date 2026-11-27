@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 
 import 'app.dart';
-import 'daemon_health.dart';
-
-const String _defaultDaemonUrl = String.fromEnvironment(
-  'ALFRED_DAEMON_URL',
-  defaultValue: kDefaultDaemonUrl,
-);
+import 'daemon_config.dart';
 
 void main() {
-  runApp(AlfredApp(daemonBaseUri: Uri.parse(_defaultDaemonUrl)));
+  WidgetsFlutterBinding.ensureInitialized();
+  SemanticsBinding.instance.ensureSemantics();
+  runApp(AlfredApp(daemonBaseUri: resolveDaemonBaseUri()));
 }
