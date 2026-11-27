@@ -1,0 +1,8 @@
+{
+  "name": "alfred-searxng-environment",
+  "private": true,
+  "dependencies": {
+    "@earendil-works/pi-env": "1.6.1",
+    "mcp-searxng": "2.11.0"
+  }
+}
